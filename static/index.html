@@ -1,21 +1,68 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>AI Voice Agent</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Voice Agent</title>
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="color-scheme" content="light dark" />
 </head>
-<body>
-    <div id="app">
-        <h1>AI Voice Agent - Text to Speech</h1>
-        <div id="tts-section">
-            <input type="text" id="tts-text" placeholder="Enter text to convert to speech" size="50" />
-            <button id="tts-submit">Generate Audio</button>
-            <div id="tts-status"></div>
-            <audio id="tts-audio" controls></audio>
+<body class="h-full bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 antialiased">
+  <div id="app" class="min-h-full flex items-center justify-center p-6">
+    <div class="w-full max-w-xl">
+      <!-- Card -->
+      <div class="bg-white dark:bg-gray-800/70 backdrop-blur rounded-2xl shadow-sm ring-1 ring-gray-200 dark:ring-gray-700 overflow-hidden">
+        <!-- Header -->
+        <div class="px-6 py-5 border-b border-gray-200 dark:border-gray-700">
+          <h1 class="text-xl font-semibold tracking-tight">
+            AI Voice Agent
+            <span class="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">Text to Speech</span>
+          </h1>
         </div>
-    </div>
 
-    <script src="/static/app.js"></script>
+        <!-- Content -->
+        <div class="px-6 py-5 space-y-4">
+          <label for="tts-text" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Enter text
+          </label>
+          <div class="flex gap-3">
+            <input
+              type="text"
+              id="tts-text"
+              placeholder="Type something to convert to speech..."
+              class="flex-1 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+            />
+            <button
+              id="tts-submit"
+              class="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-indigo-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition"
+            >
+              Generate
+            </button>
+          </div>
+
+          <div id="tts-status" class="text-sm text-gray-500 dark:text-gray-400 min-h-5"></div>
+
+          <div class="mt-2">
+            <audio id="tts-audio" controls class="w-full rounded-lg outline-none"></audio>
+          </div>
+        </div>
+
+        <!-- Footer / Helper actions -->
+        <div class="px-6 py-4 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
+            Ready
+          </div>
+          <div>
+            <button id="testBtn" class="hidden"></button>
+            <span id="output" class="sr-only"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>
