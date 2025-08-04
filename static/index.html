@@ -7,11 +7,15 @@
 </head>
 <body>
     <div id="app">
-        <h1>🎙️ Day 1: AI Voice Agent Project</h1>
-        <p>Welcome! Backend connected.</p>
-        <button id="testBtn">Test API</button>
-        <div id="output"></div>
+        <h1>AI Voice Agent - Text to Speech</h1>
+        <div id="tts-section">
+            <input type="text" id="tts-text" placeholder="Enter text to convert to speech" size="50" />
+            <button id="tts-submit">Generate Audio</button>
+            <div id="tts-status"></div>
+            <audio id="tts-audio" controls></audio>
+        </div>
     </div>
+
     <script src="/static/app.js"></script>
 </body>
 </html>
