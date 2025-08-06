@@ -150,53 +150,38 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 				}
 			};
 
-			mediaRecorder.onstop = () => {
+			mediaRecorder.onstop = async () => {
 				if (recordingTicker) {
 					clearInterval(recordingTicker);
 					recordingTicker = null;
 				}
 				setRecordingUI(false);
-
-				updateStatus("Recording stopped. Preparing playback…");
-				// Create a blob from chunks
+				updateStatus("Recording stopped. Preparing for upload…");
+			
 				const mime = mediaRecorder.mimeType || "audio/webm";
-				const blob = new Blob(chunks, {type: mime});
+				const blob = new Blob(chunks, { type: mime });
 				chunks = [];
-
-				// Revoke previous object URL if present
+			
+				// Upload the audio file
+				await uploadAudio(blob);
+			
 				if (objectUrl) {
 					URL.revokeObjectURL(objectUrl);
 					objectUrl = null;
 				}
-
+			
 				objectUrl = URL.createObjectURL(blob);
-
-				// Reset player and force metadata parsing so duration shows
-				player.pause();
-				player.removeAttribute("src"); // Clear previous to force reload cycle
-				player.load();
-
+			
 				player.src = objectUrl;
-
-				// In some browsers, calling load after setting src helps duration
 				player.load();
-
-				// Try to auto-play (may be blocked)
-				player.play().catch(() => {
-					// Autoplay might be blocked; user can press play
-				});
-
-				// Stop mic tracks to release device
+				player.play().catch(() => {});
+			
 				if (mediaStream) {
 					mediaStream.getTracks().forEach((t) => t.stop());
 					mediaStream = null;
 				}
-
-				// If metadata already available quickly, show immediately; otherwise loadedmetadata handler will show
+			
 				showDuration();
-				if (!isFinite(player.duration) || player.duration === 0) {
-					updateStatus("Preparing audio…");
-				}
 			};
 
 			mediaRecorder.start(); // start recording
@@ -215,3 +200,33 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 		}
 	});
 })();
+// New function to handle audio upload
+const uploadAudio = async (blob) => {
+	const statusEl = document.getElementById("echoStatus");
+	const uploadStatus = (msg) => {
+		if (statusEl) statusEl.textContent = msg;
+	};
+
+	uploadStatus("Uploading audio…");
+	const formData = new FormData();
+	formData.append("file", blob, "recording.webm");
+
+	try {
+		const response = await fetch("/api/upload", {
+			method: "POST",
+			body: formData,
+		});
+
+		if (!response.ok) {
+			throw new Error(`HTTP error! status: ${response.status}`);
+		}
+
+		const result = await response.json();
+		uploadStatus(
+			`Upload successful: ${result.filename} (${result.content_type}, ${result.size} bytes)`
+		);
+	} catch (error) {
+		console.error("Upload error:", error);
+		uploadStatus(`Upload failed: ${error.message}`);
+	}
+};
