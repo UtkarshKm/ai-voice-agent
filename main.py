@@ -58,15 +58,7 @@ async def generate_speech(request: TTSRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
 
-# Health check
-@app.get("/api/health")
-async def health_check():
-    return {
-        "status": "AI Voice Agent Running!",
-        "day": 2,
-        "endpoint": "/api/text-to-speech",
-        "murf_sdk": "Ready"
-    }
+
 
 # Upload endpoint
 @app.post("/api/upload")
