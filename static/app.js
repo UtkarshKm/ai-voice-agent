@@ -38,6 +38,7 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 		ttsStatus.textContent = `Error: ${error.message}`;
 	}
 });
+
 /* Echo Bot: MediaRecorder-based microphone capture and playback */
 (function setupEchoBot() {
 	const startBtn = document.getElementById("startRecBtn");
@@ -162,8 +163,8 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 				const blob = new Blob(chunks, {type: mime});
 				chunks = [];
 
-				// Perform upload and transcription
-				await uploadAndTranscribe(blob);
+				// Perform transcription
+				await transcribeAudio(blob);
 
 				if (objectUrl) {
 					URL.revokeObjectURL(objectUrl);
@@ -201,8 +202,8 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 	});
 })();
 
-// Function to handle both upload and transcription
-const uploadAndTranscribe = async (blob) => {
+// Function to transcribe audio directly
+const transcribeAudio = async (blob) => {
 	const statusEl = document.getElementById("echoStatus");
 	const transcriptDisplay = document.getElementById("transcript-display");
 
@@ -210,13 +211,12 @@ const uploadAndTranscribe = async (blob) => {
 		if (statusEl) statusEl.textContent = msg;
 	};
 
-	updateStatus("Uploading and transcribing…");
+	updateStatus("Transcribing audio…");
 	transcriptDisplay.textContent = ""; // Clear previous transcript
 
 	const formData = new FormData();
 	formData.append("file", blob, "recording.webm");
 
-	// --- Transcription ---
 	try {
 		const response = await fetch("/api/transcribe/file", {
 			method: "POST",
@@ -232,27 +232,12 @@ const uploadAndTranscribe = async (blob) => {
 			transcriptDisplay.textContent = result.transcript;
 			updateStatus("Transcription successful.");
 		} else {
-			transcriptDisplay.textContent =
-				"Transcription failed or returned no text.";
+			transcriptDisplay.textContent = "Transcription failed or returned no text.";
 			updateStatus("Transcription finished.");
 		}
 	} catch (error) {
 		console.error("Transcription error:", error);
 		transcriptDisplay.textContent = `Transcription failed: ${error.message}`;
 		updateStatus("Transcription error.");
-	}
-
-	// --- Original Upload (optional, can be removed if not needed) ---
-	try {
-		const uploadResponse = await fetch("/api/upload", {
-			method: "POST",
-			body: formData,
-		});
-		if (!uploadResponse.ok) {
-			// Don't overwrite the transcription status with this error
-			console.error(`Upload failed: HTTP status ${uploadResponse.status}`);
-		}
-	} catch (error) {
-		console.error("Upload error:", error);
 	}
 };

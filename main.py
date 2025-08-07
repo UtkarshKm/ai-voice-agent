@@ -1,12 +1,9 @@
-
-        # Call Murf's TTS API using SDK
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from murf import Murf
 import os
-import shutil
 from dotenv import load_dotenv
 import assemblyai as aai
 
@@ -17,9 +14,6 @@ load_dotenv()
 aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
 
 app = FastAPI(title="AI Voice Agent - Day 2", version="1.0.0")
-
-# Create uploads directory if it doesn't exist
-os.makedirs("uploads", exist_ok=True)
 
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -39,7 +33,7 @@ async def get_home():
     with open("static/index.html", "r", encoding="utf-8") as file:
         return HTMLResponse(content=file.read())
 
-# TTS endpoint - exactly what the task asks for
+# TTS endpoint
 @app.post("/api/text-to-speech")
 async def generate_speech(request: TTSRequest):
     """
@@ -64,41 +58,17 @@ async def generate_speech(request: TTSRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
 
-
-
-# Upload endpoint
-@app.post("/api/upload")
-async def upload_audio(file: UploadFile = File(...)):
-    """
-    Receive an audio file, save it, and return its metadata.
-    """
-    upload_folder = "uploads"
-    file_path = os.path.join(upload_folder, file.filename)
-    
-    try:
-        # Save the uploaded file
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        # Get file size
-        file_size = os.path.getsize(file_path)
-        
-        return {
-            "filename": file.filename,
-            "content_type": file.content_type,
-            "size": file_size
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
-
+# Transcription endpoint
 @app.post("/api/transcribe/file")
 async def transcribe_audio(file: UploadFile = File(...)):
+    """
+    Transcribe audio file using AssemblyAI - no file storage needed
+    """
     try:
-        # Read the file content
+        # Read the file content directly into memory
         audio_data = await file.read()
 
-        # Transcribe the audio data
+        # Transcribe the audio data directly (no file saving)
         transcriber = aai.Transcriber()
         transcript = transcriber.transcribe(audio_data)
 
@@ -110,31 +80,21 @@ async def transcribe_audio(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
-
-
-
-# Upload endpoint
+# Optional: Keep one upload endpoint if you need it for other purposes
 @app.post("/api/upload")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_metadata(file: UploadFile = File(...)):
     """
-    Receive an audio file, save it, and return its metadata.
+    Return file metadata without saving the file
     """
-    upload_folder = "uploads"
-    file_path = os.path.join(upload_folder, file.filename)
-    
     try:
-        # Save the uploaded file
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        # Get file size
-        file_size = os.path.getsize(file_path)
+        # Just read to get size, don't save
+        content = await file.read()
         
         return {
             "filename": file.filename,
             "content_type": file.content_type,
-            "size": file_size
+            "size": len(content)
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"File processing failed: {str(e)}")
