@@ -156,31 +156,31 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 					recordingTicker = null;
 				}
 				setRecordingUI(false);
-				updateStatus("Recording stopped. Preparing for upload…");
-			
+				updateStatus("Recording stopped. Processing…");
+
 				const mime = mediaRecorder.mimeType || "audio/webm";
-				const blob = new Blob(chunks, { type: mime });
+				const blob = new Blob(chunks, {type: mime});
 				chunks = [];
-			
-				// Upload the audio file
-				await uploadAudio(blob);
-			
+
+				// Perform upload and transcription
+				await uploadAndTranscribe(blob);
+
 				if (objectUrl) {
 					URL.revokeObjectURL(objectUrl);
 					objectUrl = null;
 				}
-			
+
 				objectUrl = URL.createObjectURL(blob);
-			
+
 				player.src = objectUrl;
 				player.load();
 				player.play().catch(() => {});
-			
+
 				if (mediaStream) {
 					mediaStream.getTracks().forEach((t) => t.stop());
 					mediaStream = null;
 				}
-			
+
 				showDuration();
 			};
 
@@ -200,19 +200,25 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 		}
 	});
 })();
-// New function to handle audio upload
-const uploadAudio = async (blob) => {
+
+// Function to handle both upload and transcription
+const uploadAndTranscribe = async (blob) => {
 	const statusEl = document.getElementById("echoStatus");
-	const uploadStatus = (msg) => {
+	const transcriptDisplay = document.getElementById("transcript-display");
+
+	const updateStatus = (msg) => {
 		if (statusEl) statusEl.textContent = msg;
 	};
 
-	uploadStatus("Uploading audio…");
+	updateStatus("Uploading and transcribing…");
+	transcriptDisplay.textContent = ""; // Clear previous transcript
+
 	const formData = new FormData();
 	formData.append("file", blob, "recording.webm");
 
+	// --- Transcription ---
 	try {
-		const response = await fetch("/api/upload", {
+		const response = await fetch("/api/transcribe/file", {
 			method: "POST",
 			body: formData,
 		});
@@ -222,11 +228,31 @@ const uploadAudio = async (blob) => {
 		}
 
 		const result = await response.json();
-		uploadStatus(
-			`Upload successful: ${result.filename} (${result.content_type}, ${result.size} bytes)`
-		);
+		if (result.transcript) {
+			transcriptDisplay.textContent = result.transcript;
+			updateStatus("Transcription successful.");
+		} else {
+			transcriptDisplay.textContent =
+				"Transcription failed or returned no text.";
+			updateStatus("Transcription finished.");
+		}
+	} catch (error) {
+		console.error("Transcription error:", error);
+		transcriptDisplay.textContent = `Transcription failed: ${error.message}`;
+		updateStatus("Transcription error.");
+	}
+
+	// --- Original Upload (optional, can be removed if not needed) ---
+	try {
+		const uploadResponse = await fetch("/api/upload", {
+			method: "POST",
+			body: formData,
+		});
+		if (!uploadResponse.ok) {
+			// Don't overwrite the transcription status with this error
+			console.error(`Upload failed: HTTP status ${uploadResponse.status}`);
+		}
 	} catch (error) {
 		console.error("Upload error:", error);
-		uploadStatus(`Upload failed: ${error.message}`);
 	}
 };
