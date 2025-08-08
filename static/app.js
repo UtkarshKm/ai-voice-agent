@@ -163,26 +163,13 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 				const blob = new Blob(chunks, {type: mime});
 				chunks = [];
 
-				// Perform transcription
-				await transcribeAudio(blob);
-
-				if (objectUrl) {
-					URL.revokeObjectURL(objectUrl);
-					objectUrl = null;
-				}
-
-				objectUrl = URL.createObjectURL(blob);
-
-				player.src = objectUrl;
-				player.load();
-				player.play().catch(() => {});
+				// Perform transcription and echo
+				await transcribeAndEcho(blob);
 
 				if (mediaStream) {
 					mediaStream.getTracks().forEach((t) => t.stop());
 					mediaStream = null;
 				}
-
-				showDuration();
 			};
 
 			mediaRecorder.start(); // start recording
@@ -202,42 +189,51 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 	});
 })();
 
-// Function to transcribe audio directly
-const transcribeAudio = async (blob) => {
-	const statusEl = document.getElementById("echoStatus");
-	const transcriptDisplay = document.getElementById("transcript-display");
+// Function to handle transcription and TTS echo
+const transcribeAndEcho = async (blob) => {
+    const statusEl = document.getElementById("echoStatus");
+    const transcriptDisplay = document.getElementById("transcript-display");
+    const player = document.getElementById("echoPlayer");
 
-	const updateStatus = (msg) => {
-		if (statusEl) statusEl.textContent = msg;
-	};
+    const updateStatus = (msg) => {
+        if (statusEl) statusEl.textContent = msg;
+    };
 
-	updateStatus("Transcribing audio…");
-	transcriptDisplay.textContent = ""; // Clear previous transcript
+    updateStatus("Transcribing and generating echo…");
+    transcriptDisplay.textContent = ""; // Clear previous transcript
 
-	const formData = new FormData();
-	formData.append("file", blob, "recording.webm");
+    const formData = new FormData();
+    formData.append("file", blob, "recording.webm");
 
-	try {
-		const response = await fetch("/api/transcribe/file", {
-			method: "POST",
-			body: formData,
-		});
+    try {
+        const response = await fetch("/api/tts/echo", {
+            method: "POST",
+            body: formData,
+        });
 
-		if (!response.ok) {
-			throw new Error(`HTTP error! status: ${response.status}`);
-		}
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
 
-		const result = await response.json();
-		if (result.transcript) {
-			transcriptDisplay.textContent = result.transcript;
-			updateStatus("Transcription successful.");
-		} else {
-			transcriptDisplay.textContent = "Transcription failed or returned no text.";
-			updateStatus("Transcription finished.");
-		}
-	} catch (error) {
-		console.error("Transcription error:", error);
-		transcriptDisplay.textContent = `Transcription failed: ${error.message}`;
-		updateStatus("Transcription error.");
-	}
+        const result = await response.json();
+
+        // Display the transcript
+        if (result.transcript) {
+            transcriptDisplay.textContent = result.transcript;
+        }
+
+        // Play the new audio from Murf
+        if (result.audio_url) {
+            player.src = result.audio_url;
+            player.play();
+            updateStatus("Echo generated and playing.");
+        } else {
+            updateStatus("Echo generation failed or no speech detected.");
+        }
+
+    } catch (error) {
+        console.error("Echo error:", error);
+        transcriptDisplay.textContent = `Echo failed: ${error.message}`;
+        updateStatus("Echo error.");
+    }
 };

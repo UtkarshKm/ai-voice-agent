@@ -98,3 +98,42 @@ async def upload_metadata(file: UploadFile = File(...)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"File processing failed: {str(e)}")
+
+@app.post("/api/tts/echo")
+async def tts_echo(file: UploadFile = File(...)):
+    """
+    Transcribe audio, generate new audio with Murf, and return the audio URL.
+    """
+    try:
+        # 1. Transcribe the uploaded audio file
+        audio_data = await file.read()
+        transcriber = aai.Transcriber()
+        transcript = transcriber.transcribe(audio_data)
+
+        if transcript.status == aai.TranscriptStatus.error:
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {transcript.error}")
+
+        transcribed_text = transcript.text
+        if not transcribed_text or not transcribed_text.strip():
+            # Return a successful response but with a note that no speech was generated
+            return {
+                "audio_url": None,
+                "transcript": "(No speech detected)"
+            }
+
+        # 2. Generate new audio from the transcribed text using Murf
+        murf_response = client.text_to_speech.generate(
+            text=transcribed_text,
+            voice_id="en-US-ken",  # Using a default voice
+            style="Conversational"
+        )
+
+        # 3. Return the new audio URL and the transcript
+        return {
+            "audio_url": murf_response.audio_file,
+            "transcript": transcribed_text
+        }
+
+    except Exception as e:
+        # Catch any exception, including from Murf or AssemblyAI
+        raise HTTPException(status_code=500, detail=f"Echo Bot failed: {str(e)}")
