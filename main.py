@@ -58,46 +58,7 @@ async def generate_speech(request: TTSRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
 
-# Transcription endpoint
-@app.post("/api/transcribe/file")
-async def transcribe_audio(file: UploadFile = File(...)):
-    """
-    Transcribe audio file using AssemblyAI - no file storage needed
-    """
-    try:
-        # Read the file content directly into memory
-        audio_data = await file.read()
 
-        # Transcribe the audio data directly (no file saving)
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(audio_data)
-
-        if transcript.status == aai.TranscriptStatus.error:
-            raise HTTPException(status_code=500, detail=transcript.error)
-
-        return {"transcript": transcript.text}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-
-# Optional: Keep one upload endpoint if you need it for other purposes
-@app.post("/api/upload")
-async def upload_metadata(file: UploadFile = File(...)):
-    """
-    Return file metadata without saving the file
-    """
-    try:
-        # Just read to get size, don't save
-        content = await file.read()
-        
-        return {
-            "filename": file.filename,
-            "content_type": file.content_type,
-            "size": len(content)
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File processing failed: {str(e)}")
 
 @app.post("/api/tts/echo")
 async def tts_echo(file: UploadFile = File(...)):
