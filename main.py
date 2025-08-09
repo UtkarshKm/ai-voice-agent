@@ -6,12 +6,16 @@ from murf import Murf
 import os
 from dotenv import load_dotenv
 import assemblyai as aai
+from google import genai
 
 # Load environment variables
 load_dotenv()
 
 # Initialize AssemblyAI
 aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
+
+# Initialize Google GenAI client
+genai_client = genai.Client()
 
 app = FastAPI(title="AI Voice Agent - Day 2", version="1.0.0")
 
@@ -98,3 +102,11 @@ async def tts_echo(file: UploadFile = File(...)):
     except Exception as e:
         # Catch any exception, including from Murf or AssemblyAI
         raise HTTPException(status_code=500, detail=f"Echo Bot failed: {str(e)}")
+
+@app.post("/llm/query")
+def llm_query(request: TTSRequest):
+    response = genai_client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=request.text
+    )
+    return {"text": response.text}
