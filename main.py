@@ -17,7 +17,7 @@ aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
 # Initialize Google GenAI client
 genai_client = genai.Client()
 
-app = FastAPI(title="AI Voice Agent - Day 2", version="1.0.0")
+app = FastAPI(title="AI Voice Agent - Day 8 - Utkarsh Kumawat", version="1.0.0")
 
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -104,9 +104,76 @@ async def tts_echo(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Echo Bot failed: {str(e)}")
 
 @app.post("/llm/query")
-def llm_query(request: TTSRequest):
-    response = genai_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=request.text
-    )
-    return {"text": response.text}
+async def llm_query_from_audio(file: UploadFile = File(...)):
+    """
+    Accepts audio, transcribes it, sends it to an LLM, 
+    and returns the LLM's response as synthesized audio.
+    """
+    try:
+        # 1. Transcribe the user's audio
+        audio_data = await file.read()
+        transcriber = aai.Transcriber()
+        user_transcript = transcriber.transcribe(audio_data)
+
+        if user_transcript.status == aai.TranscriptStatus.error:
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {user_transcript.error}")
+
+        user_text = user_transcript.text
+        if not user_text or not user_text.strip():
+            return {
+                "audio_url": None, 
+                "user_transcript": "(No speech detected)", 
+                "llm_response_text": ""
+            }
+
+        # 2. Send the transcript to the LLM with a directive for a concise response
+        prompt = f"Please provide a concise response, under 3000 characters. User query: '{user_text}'"
+        
+        # Fixed Google GenAI usage - using the client properly
+        try:
+            # Option 1: Using the new Google GenAI API structure
+            response = genai_client.models.generate_content(
+            model="gemini-2.5-flash", contents=[prompt]
+)
+            llm_text = response.text
+        except Exception as genai_error:
+            # Fallback or alternative approach
+            print(f"GenAI Error: {genai_error}")
+            # You might want to use a different model or handle this differently
+            llm_text = f"I heard you say: '{user_text}'. This is a test response since the LLM service is currently unavailable."
+
+        # Ensure the response isn't too long for TTS
+        if len(llm_text) > 3000:
+            llm_text = llm_text[:2900] + "..."
+
+        # 3. Synthesize the LLM's text response into audio using Murf
+        try:
+            murf_response = client.text_to_speech.generate(
+                text=llm_text,
+                voice_id="en-US-ken",
+                style="Conversational"
+            )
+            audio_url = murf_response.audio_file
+        except Exception as murf_error:
+            print(f"Murf TTS Error: {murf_error}")
+            # Return response without audio if TTS fails
+            return {
+                "audio_url": None,
+                "user_transcript": user_text,
+                "llm_response_text": llm_text,
+                "error": "TTS generation failed"
+            }
+
+        # 4. Return all relevant data to the client
+        return {
+            "audio_url": audio_url,
+            "user_transcript": user_text,
+            "llm_response_text": llm_text
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as they are
+        raise
+    except Exception as e:
+        print(f"Unexpected error in LLM query: {e}")
+        raise HTTPException(status_code=500, detail=f"LLM query failed: {str(e)}")

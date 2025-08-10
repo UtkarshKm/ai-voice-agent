@@ -7,57 +7,98 @@
     <!-- Tailwind CSS via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <meta name="color-scheme" content="light dark" />
+    <style>
+        /* Custom audio controls styling */
+        audio::-webkit-media-controls-panel {
+            background-color: transparent;
+        }
+        
+        /* Loading animation */
+        .pulse-dot {
+            animation: pulse-dot 1.4s infinite ease-in-out;
+        }
+        .pulse-dot:nth-child(1) { animation-delay: -0.32s; }
+        .pulse-dot:nth-child(2) { animation-delay: -0.16s; }
+        
+        @keyframes pulse-dot {
+            0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+    </style>
 </head>
 <body class="h-full bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 antialiased">
     <div id="app" class="min-h-full flex items-center justify-center p-6">
-        <div class="w-full max-w-xl">
+        <div class="w-full max-w-2xl">
             <!-- Card -->
-            <div class="bg-white dark:bg-gray-800/70 backdrop-blur rounded-2xl shadow-sm ring-1 ring-gray-200 dark:ring-gray-700 overflow-hidden">
+            <div class="bg-white dark:bg-gray-800/70 backdrop-blur rounded-2xl shadow-xl ring-1 ring-gray-200 dark:ring-gray-700 overflow-hidden">
                 <!-- Header -->
-                <div class="px-6 py-5 border-b border-gray-200 dark:border-gray-700">
+                <header class="px-6 py-5 border-b border-gray-200 dark:border-gray-700">
                     <h1 class="text-xl font-semibold tracking-tight">
-                        AI Voice Agent
+                        🎙️ AI Voice Agent
                         <span class="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">Voice Assistant</span>
                     </h1>
-                </div>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                        Convert text to speech, echo recordings, or chat with AI using your voice
+                    </p>
+                </header>
 
                 <!-- Text-to-Speech Section -->
-                <div class="px-6 py-5 space-y-4">
-                    <label for="tts-text" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                        Enter text
-                    </label>
-                    <div class="flex gap-3">
-                        <input
-                            type="text"
-                            id="tts-text"
-                            placeholder="Type something to convert to speech..."
-                            class="flex-1 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
-                        />
-                        <button
-                            id="tts-submit"
-                            class="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-indigo-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition"
-                        >
-                            Generate
-                        </button>
+                <section class="px-6 py-5 space-y-4" aria-label="Text to Speech">
+                    <div>
+                        <label for="tts-text" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            📝 Enter text to convert to speech
+                        </label>
+                        <div class="flex gap-3">
+                            <input
+                                type="text"
+                                id="tts-text"
+                                placeholder="Type something to convert to speech..."
+                                maxlength="5000"
+                                class="flex-1 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+                                aria-describedby="tts-status"
+                            />
+                            <button
+                                id="tts-submit"
+                                class="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-indigo-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition disabled:opacity-50"
+                                aria-label="Generate speech from text"
+                            >
+                                ✨ Generate
+                            </button>
+                        </div>
                     </div>
 
-                    <div id="tts-status" class="text-sm text-gray-500 dark:text-gray-400 min-h-5"></div>
+                    <div id="tts-status" class="text-sm text-gray-500 dark:text-gray-400 min-h-5" role="status" aria-live="polite"></div>
 
-                    <div class="mt-2">
-                        <audio id="tts-audio" controls class="w-full rounded-lg outline-none"></audio>
+                    <div class="audio-container">
+                        <audio 
+                            id="tts-audio" 
+                            controls 
+                            preload="none"
+                            class="w-full rounded-lg outline-none"
+                            aria-label="Generated speech audio"
+                        ></audio>
                     </div>
-                </div>
+                </section>
 
                 <!-- Echo Bot Section -->
-                <section id="echo-bot-section" class="p-4 border-t border-gray-200 dark:border-gray-700">
-                    <h2 class="text-lg font-semibold">Echo Bot v2</h2>
+                <section id="echo-bot-section" class="p-6 border-t border-gray-200 dark:border-gray-700 transition-all duration-200" aria-label="Echo Bot">
+                    <div class="flex items-center gap-2 mb-3">
+                        <h2 class="text-lg font-semibold">🔄 Echo Bot</h2>
+                        <span class="text-xs bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 px-2 py-1 rounded-full">
+                            Speech-to-Speech
+                        </span>
+                    </div>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                        Record your voice and hear it played back with AI voice synthesis
+                    </p>
 
                     <!-- Controls row -->
-                    <div class="mt-3 flex gap-3">
+                    <div class="flex gap-3 mb-4">
                         <button
                             id="startRecBtn"
                             type="button"
-                            class="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-emerald-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition"
+                            class="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-emerald-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                            aria-label="Start recording for echo"
                         >
                             🎤 Start Recording
                         </button>
@@ -66,41 +107,130 @@
                             type="button"
                             disabled
                             class="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-rose-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition disabled:opacity-50"
+                            aria-label="Stop recording"
                         >
                             ⏹️ Stop Recording
                         </button>
                     </div>
 
                     <!-- Audio player -->
-                    <div class="mt-2 pt-2">
-                        <audio id="echoPlayer" controls class="w-full rounded-lg outline-none"></audio>
+                    <div class="mb-3">
+                        <audio 
+                            id="echoPlayer" 
+                            controls 
+                            preload="none"
+                            class="w-full rounded-lg outline-none"
+                            aria-label="Echo playback audio"
+                        ></audio>
                     </div>
 
                     <!-- Status line -->
-                    <p id="echoStatus" class="text-sm text-gray-500 dark:text-gray-400 min-h-5 mt-2"></p>
+                    <div id="echoStatus" class="text-sm text-gray-500 dark:text-gray-400 min-h-5" role="status" aria-live="polite"></div>
                 </section>
 
                 <!-- Transcription Section -->
-                <section id="transcription-section" class="p-4 border-t border-gray-200 dark:border-gray-700">
-                    <h2 class="text-lg font-semibold mb-3">📝 Live Transcript</h2>
+                <section id="transcription-section" class="p-6 border-t border-gray-200 dark:border-gray-700" aria-label="Speech Transcription">
+                    <div class="flex items-center gap-2 mb-3">
+                        <h2 class="text-lg font-semibold">📝 Live Transcript</h2>
+                        <span class="text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full">
+                            Speech-to-Text
+                        </span>
+                    </div>
                     <div 
                         id="transcript-display" 
-                        class="mt-2 p-4 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 text-sm text-gray-700 dark:text-gray-300 min-h-16 italic text-center flex items-center justify-center"
+                        class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 text-sm text-gray-700 dark:text-gray-300 min-h-16 italic text-center flex items-center justify-center transition-all"
+                        role="region"
+                        aria-label="Transcribed text will appear here"
+                        aria-live="polite"
                     >
                         Your speech will appear here after recording...
                     </div>
                 </section>
 
+                <!-- LLM Voice Query Section -->
+                <section id="llm-query-section" class="p-6 border-t border-gray-200 dark:border-gray-700 transition-all duration-200" aria-label="AI Voice Chat">
+                    <div class="flex items-center gap-2 mb-3">
+                        <h2 class="text-lg font-semibold">🤖 AI Voice Chat</h2>
+                        <span class="text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-2 py-1 rounded-full">
+                            Voice-to-Voice
+                        </span>
+                    </div>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                        Ask questions using your voice and get AI responses in speech
+                    </p>
+
+                    <!-- Controls -->
+                    <div class="flex gap-3 mb-4">
+                        <button
+                            id="llmStartRecBtn"
+                            type="button"
+                            class="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-blue-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition disabled:opacity-50"
+                            aria-label="Start recording to ask AI"
+                        >
+                            🎤 Ask AI
+                        </button>
+                        <button
+                            id="llmStopRecBtn"
+                            type="button"
+                            disabled
+                            class="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-rose-600 px-4 py-3 text-sm font-medium text-white shadow-sm hover:bg-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 transition disabled:opacity-50"
+                            aria-label="Stop recording"
+                        >
+                            ⏹️ Stop
+                        </button>
+                    </div>
+
+                    <!-- Audio player for LLM response -->
+                    <div class="mb-3">
+                        <audio 
+                            id="llmPlayer" 
+                            controls 
+                            preload="none"
+                            class="w-full rounded-lg outline-none"
+                            aria-label="AI response audio"
+                        ></audio>
+                    </div>
+
+                    <!-- Status -->
+                    <div id="llmStatus" class="text-sm text-gray-500 dark:text-gray-400 min-h-5 mb-3" role="status" aria-live="polite"></div>
+                    
+                    <!-- Conversation Display -->
+                    <div 
+                        id="llmConversation" 
+                        class="space-y-2 text-sm max-h-60 overflow-y-auto"
+                        role="log"
+                        aria-label="Conversation history"
+                        aria-live="polite"
+                    ></div>
+                </section>
+
                 <!-- Footer -->
-                <div class="px-6 py-4 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500 flex items-center justify-between">
-                    <div class="flex items-center gap-2">
-                        <span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
-                        Ready
+                <footer class="px-6 py-4 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-200 dark:border-gray-700">
+                    <div class="flex items-center justify-between text-xs text-gray-500">
+                        <div class="flex items-center gap-2">
+                            <span class="inline-block h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true"></span>
+                            <span>Ready</span>
+                            <span class="hidden sm:inline text-gray-400">• Use Ctrl+Enter for quick TTS</span>
+                        </div>
+                        <div class="text-xs text-gray-400">
+                            Made with ❤️ by Utkarsh
+                        </div>
                     </div>
-                    <div class="text-xs text-gray-400">
-                        Made with ❤️ by Utkarsh
-                    </div>
+                </footer>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading indicator (hidden by default) -->
+    <div id="global-loading" class="fixed inset-0 bg-black/20 backdrop-blur-sm z-50 flex items-center justify-center hidden" role="dialog" aria-label="Loading">
+        <div class="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-xl">
+            <div class="flex items-center gap-3">
+                <div class="flex gap-1">
+                    <div class="w-2 h-2 bg-blue-500 rounded-full pulse-dot"></div>
+                    <div class="w-2 h-2 bg-blue-500 rounded-full pulse-dot"></div>
+                    <div class="w-2 h-2 bg-blue-500 rounded-full pulse-dot"></div>
                 </div>
+                <span class="text-sm text-gray-600 dark:text-gray-300">Processing...</span>
             </div>
         </div>
     </div>
