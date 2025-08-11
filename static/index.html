@@ -24,6 +24,14 @@
             0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
             40% { transform: scale(1); opacity: 1; }
         }
+
+        /* Animation for auto-recording feedback */
+        @keyframes flash-blue-ring {
+            50% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.6); }
+        }
+        .flash-recording-feedback {
+            animation: flash-blue-ring 1s ease-in-out;
+        }
     </style>
 </head>
 <body class="h-full bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 antialiased">
@@ -212,8 +220,11 @@
                             <span>Ready</span>
                             <span class="hidden sm:inline text-gray-400">• Use Ctrl+Enter for quick TTS</span>
                         </div>
-                        <div class="text-xs text-gray-400">
-                            Made with ❤️ by Utkarsh
+                        <div class="text-xs text-gray-400 flex justify-between w-full">
+                            <span class="font-mono text-gray-500" title="Session ID">
+                                Session: <span id="session-id-display">...</span>
+                            </span>
+                            <span>Made with ❤️ by Utkarsh</span>
                         </div>
                     </div>
                 </footer>
