@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, File, UploadFile, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -10,6 +10,14 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 import threading
 import time
+import asyncio
+import logging
+from typing import Optional
+from contextlib import asynccontextmanager
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -17,19 +25,47 @@ load_dotenv()
 # Initialize AssemblyAI
 aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
 
-# Configure Google GenAI - ensure GOOGLE_GENAI_API_KEY is in your .env file
+# Configure Google GenAI
 genai.configure(api_key=os.getenv("GOOGLE_GENAI_API_KEY"))
 
-app = FastAPI(title="AI Voice Agent - Day 10 - Utkarsh Kumawat", version="1.1.0")
+# Configuration constants
+MAX_HISTORY_LENGTH = 50
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+SESSION_CLEANUP_HOURS = 24
+API_TIMEOUT_SECONDS = 30
 
-# In-memory datastore for chat histories (suitable for prototyping)
+# In-memory datastore for chat histories
 chat_histories = {}
-
-# Serve static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Initialize Murf client
 client = Murf(api_key=os.getenv("MURF_API_KEY"))
+
+# Lifespan context manager for startup/shutdown events
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("AI Voice Agent started successfully")
+    logger.info(f"Max file size: {MAX_FILE_SIZE} bytes")
+    logger.info(f"API timeout: {API_TIMEOUT_SECONDS} seconds")
+    
+    # Start cleanup thread
+    cleanup_thread = threading.Thread(target=cleanup_old_sessions, daemon=True)
+    cleanup_thread.start()
+    
+    yield
+    
+    # Shutdown (if needed)
+    logger.info("AI Voice Agent shutting down")
+
+# Create FastAPI app with lifespan
+app = FastAPI(
+    title="AI Voice Agent - Day 10 - Utkarsh Kumawat", 
+    version="1.1.0",
+    lifespan=lifespan
+)
+
+# Serve static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Request model
 class TTSRequest(BaseModel):
@@ -37,76 +73,212 @@ class TTSRequest(BaseModel):
     voice_id: str = "en-US-ken"
     style: str = "Conversational"
 
+# Helper functions
+async def validate_audio_file(file: UploadFile) -> bytes:
+    """Validate and read audio file with size limit"""
+    if file.size and file.size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size: {MAX_FILE_SIZE} bytes")
+    
+    try:
+        content = await file.read()
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+        return content
+    except Exception as e:
+        logger.error(f"File read error: {e}")
+        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
+
+async def transcribe_with_timeout(audio_data: bytes, timeout: int = API_TIMEOUT_SECONDS) -> str:
+    """Transcribe audio with timeout handling"""
+    try:
+        # Run transcription in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        
+        def transcribe_sync():
+            transcriber = aai.Transcriber()
+            return transcriber.transcribe(audio_data)
+        
+        # Use asyncio.wait_for for timeout
+        transcript = await asyncio.wait_for(
+            loop.run_in_executor(None, transcribe_sync),
+            timeout=timeout
+        )
+        
+        if transcript.status == aai.TranscriptStatus.error:
+            logger.error(f"Transcription error: {transcript.error}")
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {transcript.error}")
+        
+        return transcript.text or ""
+    
+    except asyncio.TimeoutError:
+        logger.error("Transcription timeout")
+        raise HTTPException(status_code=504, detail="Transcription service timeout")
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECONDS) -> str:
+    """Generate LLM response with timeout handling"""
+    try:
+        loop = asyncio.get_event_loop()
+        
+        def generate_sync():
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            response = model.generate_content(history)
+            return response.text
+        
+        llm_text = await asyncio.wait_for(
+            loop.run_in_executor(None, generate_sync),
+            timeout=timeout
+        )
+        
+        return llm_text
+    
+    except asyncio.TimeoutError:
+        logger.error("LLM generation timeout")
+        raise HTTPException(status_code=504, detail="LLM service timeout")
+    except Exception as e:
+        logger.error(f"LLM generation error: {e}")
+        raise e
+
+async def generate_speech_with_timeout(text: str, voice_id: str = "en-US-ken", 
+                                     style: str = "Conversational", 
+                                     timeout: int = API_TIMEOUT_SECONDS) -> str:
+    """Generate speech with timeout handling"""
+    try:
+        loop = asyncio.get_event_loop()
+        
+        def generate_speech_sync():
+            response = client.text_to_speech.generate(
+                text=text, voice_id=voice_id, style=style
+            )
+            return response.audio_file
+        
+        audio_url = await asyncio.wait_for(
+            loop.run_in_executor(None, generate_speech_sync),
+            timeout=timeout
+        )
+        
+        return audio_url
+    
+    except asyncio.TimeoutError:
+        logger.error("Speech generation timeout")
+        raise HTTPException(status_code=504, detail="Speech generation service timeout")
+    except Exception as e:
+        logger.error(f"Speech generation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Speech generation failed: {str(e)}")
+
+def manage_conversation_history(history: list) -> list:
+    """Manage conversation history length"""
+    if len(history) > MAX_HISTORY_LENGTH:
+        # Keep recent messages within limit
+        return history[-MAX_HISTORY_LENGTH:]
+    return history
+
+# Background cleanup task
+def cleanup_old_sessions():
+    """Periodically cleans up chat histories for inactive sessions."""
+    while True:
+        try:
+            time.sleep(3600)  # Wait 1 hour
+            
+            now = datetime.now()
+            inactive_threshold = timedelta(hours=SESSION_CLEANUP_HOURS)
+            
+            session_ids_to_check = list(chat_histories.keys())
+            logger.info(f"Running cleanup task for {len(session_ids_to_check)} sessions...")
+            
+            cleaned_count = 0
+            for session_id in session_ids_to_check:
+                if session_id in chat_histories:
+                    last_accessed = chat_histories[session_id]["last_accessed"]
+                    if now - last_accessed > inactive_threshold:
+                        logger.info(f"Cleaning up inactive session: {session_id}")
+                        del chat_histories[session_id]
+                        cleaned_count += 1
+            
+            logger.info(f"Cleanup finished. Removed {cleaned_count} inactive sessions.")
+            
+        except Exception as e:
+            logger.error(f"Cleanup task error: {e}")
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy", 
+        "timestamp": datetime.now(),
+        "active_sessions": len(chat_histories)
+    }
+
 # Serve homepage
 @app.get("/", response_class=HTMLResponse)
 async def get_home():
-    with open("static/index.html", "r", encoding="utf-8") as file:
-        return HTMLResponse(content=file.read())
+    try:
+        with open("static/index.html", "r", encoding="utf-8") as file:
+            return HTMLResponse(content=file.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Homepage not found")
 
 # TTS endpoint
 @app.post("/api/text-to-speech")
 async def generate_speech(request: TTSRequest):
-    """
-    Create a server endpoint that accepts text and returns audio URL
-    """
+    """Create a server endpoint that accepts text and returns audio URL"""
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    
+    if len(request.text) > 5000:
+        raise HTTPException(status_code=400, detail="Text too long. Maximum 5000 characters")
+    
     try:
-        # Call Murf's TTS API using SDK
-        response = client.text_to_speech.generate(
-            text=request.text,
-            voice_id=request.voice_id,
-            style=request.style
+        logger.info(f"Generating TTS for text length: {len(request.text)}")
+        audio_url = await generate_speech_with_timeout(
+            request.text, request.voice_id, request.style
         )
         
-        # Return URL pointing to the generated audio file
         return {
-            "audio_url": response.audio_file,
+            "audio_url": audio_url,
             "text": request.text,
             "voice_id": request.voice_id,
             "style": request.style
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"TTS generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
-
-
 
 @app.post("/api/tts/echo")
 async def tts_echo(file: UploadFile = File(...)):
-    """
-    Transcribe audio, generate new audio with Murf, and return the audio URL.
-    """
+    """Transcribe audio, generate new audio with Murf, and return the audio URL."""
     try:
-        # 1. Transcribe the uploaded audio file
-        audio_data = await file.read()
-        transcriber = aai.Transcriber()
-        transcript = transcriber.transcribe(audio_data)
-
-        if transcript.status == aai.TranscriptStatus.error:
-            raise HTTPException(status_code=500, detail=f"Transcription failed: {transcript.error}")
-
-        transcribed_text = transcript.text
-        if not transcribed_text or not transcribed_text.strip():
-            # Return a successful response but with a note that no speech was generated
+        logger.info(f"Processing echo for file: {file.filename}")
+        
+        # Validate and read file
+        audio_data = await validate_audio_file(file)
+        
+        # Transcribe with timeout
+        transcribed_text = await transcribe_with_timeout(audio_data)
+        
+        if not transcribed_text.strip():
             return {
                 "audio_url": None,
                 "transcript": "(No speech detected)"
             }
 
-        # 2. Generate new audio from the transcribed text using Murf
-        murf_response = client.text_to_speech.generate(
-            text=transcribed_text,
-            voice_id="en-US-ken",  # Using a default voice
-            style="Conversational"
-        )
+        # Generate speech with timeout
+        audio_url = await generate_speech_with_timeout(transcribed_text)
 
-        # 3. Return the new audio URL and the transcript
         return {
-            "audio_url": murf_response.audio_file,
+            "audio_url": audio_url,
             "transcript": transcribed_text
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        # Catch any exception, including from Murf or AssemblyAI
+        logger.error(f"Echo bot failed: {e}")
         raise HTTPException(status_code=500, detail=f"Echo Bot failed: {str(e)}")
 
 @app.post("/llm/query")
@@ -116,65 +288,74 @@ async def llm_query_from_audio(file: UploadFile = File(...)):
     and returns the LLM's response as synthesized audio. (Stateless)
     """
     try:
-        audio_data = await file.read()
-        transcriber = aai.Transcriber()
-        user_transcript = transcriber.transcribe(audio_data)
+        logger.info(f"Processing LLM query for file: {file.filename}")
+        
+        # Validate and read file
+        audio_data = await validate_audio_file(file)
+        
+        # Transcribe with timeout
+        user_text = await transcribe_with_timeout(audio_data)
+        
+        if not user_text.strip():
+            return {
+                "audio_url": None, 
+                "user_transcript": "(No speech detected)", 
+                "llm_response_text": ""
+            }
 
-        if user_transcript.status == aai.TranscriptStatus.error:
-            raise HTTPException(status_code=500, detail=f"Transcription failed: {user_transcript.error}")
-
-        user_text = user_transcript.text
-        if not user_text or not user_text.strip():
-            return {"audio_url": None, "user_transcript": "(No speech detected)", "llm_response_text": ""}
-
+        # Generate LLM response
         prompt = f"Please provide a concise response, under 3000 characters. User query: '{user_text}'"
         
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            response = model.generate_content(prompt)
-            llm_text = response.text
-        except Exception as genai_error:
-            print(f"GenAI Error: {genai_error}")
+            llm_text = await generate_llm_response([{"role": "user", "parts": [prompt]}])
+        except Exception:
             llm_text = f"I heard you say: '{user_text}'. This is a test response as the LLM service is currently unavailable."
 
+        # Truncate if too long
         if len(llm_text) > 3000:
             llm_text = llm_text[:2900] + "..."
 
+        # Generate speech
         try:
-            murf_response = client.text_to_speech.generate(
-                text=llm_text, voice_id="en-US-ken", style="Conversational"
-            )
-            audio_url = murf_response.audio_file
-        except Exception as murf_error:
-            print(f"Murf TTS Error: {murf_error}")
-            return {"audio_url": None, "user_transcript": user_text, "llm_response_text": llm_text, "error": "TTS generation failed"}
+            audio_url = await generate_speech_with_timeout(llm_text)
+        except Exception as e:
+            logger.error(f"Speech generation failed: {e}")
+            return {
+                "audio_url": None, 
+                "user_transcript": user_text, 
+                "llm_response_text": llm_text, 
+                "error": "TTS generation failed"
+            }
 
-        return {"audio_url": audio_url, "user_transcript": user_text, "llm_response_text": llm_text}
+        return {
+            "audio_url": audio_url, 
+            "user_transcript": user_text, 
+            "llm_response_text": llm_text
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Unexpected error in LLM query: {e}")
+        logger.error(f"Unexpected error in LLM query: {e}")
         raise HTTPException(status_code=500, detail=f"LLM query failed: {str(e)}")
 
-# --- New Chat History Endpoint ---
 @app.post("/agent/chat/{session_id}")
 async def agent_chat(session_id: str, file: UploadFile = File(...)):
-    """
-    Handles conversational chat with an agent, maintaining history.
-    """
+    """Handles conversational chat with an agent, maintaining history."""
     try:
-        # 1. Transcribe user's audio
-        audio_data = await file.read()
-        transcriber = aai.Transcriber()
-        user_transcript = transcriber.transcribe(audio_data)
-
-        if user_transcript.status == aai.TranscriptStatus.error:
-            raise HTTPException(status_code=500, detail=f"Transcription failed: {user_transcript.error}")
-
-        user_text = user_transcript.text
-        if not user_text or not user_text.strip():
-            # Return a specific, structured error that the frontend can handle
+        logger.info(f"Processing chat for session: {session_id}")
+        
+        # Validate session_id
+        if not session_id or len(session_id) < 10:
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+        
+        # Validate and read file
+        audio_data = await validate_audio_file(file)
+        
+        # Transcribe with timeout
+        user_text = await transcribe_with_timeout(audio_data)
+        
+        if not user_text.strip():
             return {
                 "audio_url": None,
                 "user_transcript": "",
@@ -182,86 +363,62 @@ async def agent_chat(session_id: str, file: UploadFile = File(...)):
                 "error": "no_speech_detected"
             }
 
-        # 2. Retrieve or create chat history, and update last accessed time
-        session_data = chat_histories.get(session_id, {"history": [], "last_accessed": datetime.now()})
+        # Retrieve or create chat history
+        session_data = chat_histories.get(session_id, {
+            "history": [], 
+            "last_accessed": datetime.now()
+        })
         history = session_data["history"]
 
-        # Add user's message to history for this turn
+        # Add user's message to history
         history.append({"role": "user", "parts": [user_text]})
+        
+        # Manage history length
+        history = manage_conversation_history(history)
 
-        # 3. Send conversation history to the LLM
+        # Generate LLM response with timeout
         llm_text = ""
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            response = model.generate_content(history) # Pass the whole history
-            llm_text = response.text
+            llm_text = await generate_llm_response(history)
+            # Add LLM's response to history only if successful
+            history.append({"role": "model", "parts": [llm_text]})
         except Exception as genai_error:
-            print(f"GenAI Error: {genai_error}")
+            logger.error(f"GenAI Error: {genai_error}")
             llm_text = f"I heard you say: '{user_text}'. The LLM service seems to be unavailable at the moment."
-            # Important: Remove the user's message from history if the LLM call fails
+            # Remove the user's message from history if LLM call fails
             history.pop()
 
-        # Add LLM's response to history only if the call was successful
-        if "The LLM service seems to be unavailable" not in llm_text:
-            history.append({"role": "model", "parts": [llm_text]})
+        # Update session data
+        chat_histories[session_id] = {
+            "history": history, 
+            "last_accessed": datetime.now()
+        }
 
-        # Update the history and last_accessed timestamp in our datastore
-        chat_histories[session_id] = {"history": history, "last_accessed": datetime.now()}
-
-        # 4. Synthesize the LLM's text response into audio
+        # Truncate response if too long
         if len(llm_text) > 3000:
             llm_text = llm_text[:2900] + "..."
 
+        # Generate speech with timeout
         audio_url = None
         try:
-            murf_response = client.text_to_speech.generate(
-                text=llm_text, voice_id="en-US-ken", style="Conversational"
-            )
-            audio_url = murf_response.audio_file
+            audio_url = await generate_speech_with_timeout(llm_text)
         except Exception as murf_error:
-            print(f"Murf TTS Error: {murf_error}")
-            return {"audio_url": None, "user_transcript": user_text, "llm_response_text": llm_text, "error": "TTS generation failed"}
+            logger.error(f"Speech generation failed: {murf_error}")
+            return {
+                "audio_url": None, 
+                "user_transcript": user_text, 
+                "llm_response_text": llm_text, 
+                "error": "TTS generation failed"
+            }
 
-        # 5. Return all relevant data to the client
-        return {"audio_url": audio_url, "user_transcript": user_text, "llm_response_text": llm_text}
+        return {
+            "audio_url": audio_url, 
+            "user_transcript": user_text, 
+            "llm_response_text": llm_text
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Unexpected error in agent chat: {e}")
+        logger.error(f"Unexpected error in agent chat: {e}")
         raise HTTPException(status_code=500, detail=f"Agent chat failed: {str(e)}")
-
-
-# --- Background Task for Memory Management ---
-
-def cleanup_old_sessions():
-    """
-    Periodically cleans up chat histories for sessions that have been inactive for over 24 hours.
-    """
-    while True:
-        # Wait for 1 hour before running the cleanup
-        time.sleep(3600)
-
-        now = datetime.now()
-        inactive_threshold = timedelta(hours=24)
-
-        # Create a copy of session IDs to iterate over, as we might modify the dict
-        session_ids_to_check = list(chat_histories.keys())
-
-        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] Running cleanup task for {len(session_ids_to_check)} sessions...")
-
-        cleaned_count = 0
-        for session_id in session_ids_to_check:
-            # Ensure the session still exists before trying to access it
-            if session_id in chat_histories:
-                last_accessed = chat_histories[session_id]["last_accessed"]
-                if now - last_accessed > inactive_threshold:
-                    print(f"  - Cleaning up inactive session: {session_id}")
-                    del chat_histories[session_id]
-                    cleaned_count += 1
-
-        print(f"Cleanup finished. Removed {cleaned_count} inactive sessions.")
-
-# Start the cleanup thread as a daemon so it doesn't block app shutdown
-cleanup_thread = threading.Thread(target=cleanup_old_sessions, daemon=True)
-cleanup_thread.start()
