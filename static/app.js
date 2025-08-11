@@ -1,3 +1,30 @@
+// --- Session Management ---
+(function() {
+    let sessionId = new URLSearchParams(window.location.search).get("session");
+
+    if (!sessionId) {
+        // Generate a new session ID using the browser's crypto API
+        sessionId = crypto.randomUUID();
+
+        // Update the URL in the browser's address bar without reloading the page
+        const newUrl = `${window.location.pathname}?session=${sessionId}${window.location.hash}`;
+        window.history.replaceState({ path: newUrl }, '', newUrl);
+    }
+
+    console.log(`Chat Session ID: ${sessionId}`);
+
+    // Make the session ID globally available for other parts of the app
+    window.chatSessionId = sessionId;
+
+    // Display the session ID in the footer
+    const sessionIdDisplay = document.getElementById("session-id-display");
+    if (sessionIdDisplay) {
+        // Display a shortened version for aesthetics
+        sessionIdDisplay.textContent = sessionId.split('-')[0];
+        sessionIdDisplay.parentElement.title = `Full Session ID: ${sessionId}`;
+    }
+})();
+
 // Text-to-Speech functionality
 document.getElementById("tts-submit").addEventListener("click", async () => {
     const ttsText = document.getElementById("tts-text").value;
@@ -261,7 +288,6 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
         startBtn.classList.toggle("opacity-50", isRecording);
         stopBtn.classList.toggle("animate-pulse", isRecording);
 
-        // Add visual feedback to section
         const section = document.getElementById("llm-query-section");
         if (section) {
             section.classList.toggle("ring-2", isRecording);
@@ -282,19 +308,35 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
         }
     };
 
+    // --- Auto-recording when AI finishes speaking ---
+    if (player) {
+        player.addEventListener('ended', () => {
+            console.log("AI audio finished, starting recording automatically.");
+            updateStatus("Listening for your reply...");
+
+            const section = document.getElementById("llm-query-section");
+            if (section) {
+                section.classList.add("flash-recording-feedback");
+                setTimeout(() => section.classList.remove("flash-recording-feedback"), 1000);
+            }
+
+            if (!startBtn.disabled) {
+                setTimeout(() => startBtn.click(), 200);
+            } else {
+                console.warn("Could not start recording automatically as the button is disabled.");
+            }
+        });
+    }
+
     const handleQuery = async (blob) => {
-        updateStatus("Sending to LLM…");
-        
-        // Clear previous conversation
-        if (conversationEl) {
-            conversationEl.innerHTML = "";
-        }
+        updateStatus("Sending to agent…");
 
         const formData = new FormData();
         formData.append("file", blob, "recording.webm");
 
         try {
-            const response = await fetch("/llm/query", {
+            const url = `/agent/chat/${window.chatSessionId}`;
+            const response = await fetch(url, {
                 method: "POST",
                 body: formData,
             });
@@ -306,13 +348,25 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
 
             const result = await response.json();
 
-            // Display conversation
+            // Handle the specific "no speech detected" error from the backend
+            if (result.error === "no_speech_detected") {
+                const errorDiv = document.createElement("div");
+                errorDiv.className = "p-3 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg text-center italic";
+                errorDiv.innerHTML = `<span class="text-yellow-800 dark:text-yellow-200">${result.llm_response_text}</span>`;
+                conversationEl.appendChild(errorDiv);
+                conversationEl.scrollTop = conversationEl.scrollHeight;
+                updateStatus("No speech detected.");
+                return; // Stop further processing
+            }
+
+            // Display conversation and scroll to bottom
             if (conversationEl) {
                 if (result.user_transcript) {
                     const userDiv = document.createElement("div");
                     userDiv.className = "p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg";
                     userDiv.innerHTML = `<strong class="text-blue-800 dark:text-blue-200">You:</strong> <span class="text-gray-800 dark:text-gray-200">${result.user_transcript}</span>`;
                     conversationEl.appendChild(userDiv);
+                    conversationEl.scrollTop = conversationEl.scrollHeight;
                 }
                 
                 if (result.llm_response_text) {
@@ -320,10 +374,10 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
                     llmDiv.className = "p-3 bg-green-100 dark:bg-green-900/30 rounded-lg mt-2";
                     llmDiv.innerHTML = `<strong class="text-green-800 dark:text-green-200">AI:</strong> <span class="text-gray-800 dark:text-gray-200">${result.llm_response_text}</span>`;
                     conversationEl.appendChild(llmDiv);
+                    conversationEl.scrollTop = conversationEl.scrollHeight;
                 }
             }
 
-            // Play audio response
             if (result.audio_url && player) {
                 player.src = result.audio_url;
                 try {
@@ -337,7 +391,6 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
                 updateStatus("LLM processing complete.");
             }
 
-            // Handle any errors returned from the server
             if (result.error) {
                 console.warn("Server returned error:", result.error);
                 updateStatus(`Warning: ${result.error}`);
@@ -347,12 +400,12 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
             console.error("LLM Query error:", error);
             updateStatus(`Error: ${error.message}`);
             
-            // Show error in conversation area
             if (conversationEl) {
                 const errorDiv = document.createElement("div");
                 errorDiv.className = "p-3 bg-red-100 dark:bg-red-900/30 rounded-lg border border-red-300 dark:border-red-700";
                 errorDiv.innerHTML = `<strong class="text-red-800 dark:text-red-200">Error:</strong> <span class="text-red-700 dark:text-red-300">${error.message}</span>`;
                 conversationEl.appendChild(errorDiv);
+                conversationEl.scrollTop = conversationEl.scrollHeight;
             }
         }
     };
@@ -379,7 +432,6 @@ document.getElementById("tts-submit").addEventListener("click", async () => {
                 setRecordingUI(true);
                 updateStatus("Listening…");
                 
-                // Add recording timer
                 let recordingStart = Date.now();
                 recordingTicker = setInterval(() => {
                     const elapsed = Math.round((Date.now() - recordingStart) / 100) / 10;
