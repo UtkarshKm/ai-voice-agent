@@ -67,12 +67,6 @@ app = FastAPI(
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Request model
-class TTSRequest(BaseModel):
-    text: str
-    voice_id: str = "en-US-ken"
-    style: str = "Conversational"
-
 # Helper functions
 async def validate_audio_file(file: UploadFile) -> bytes:
     """Validate and read audio file with size limit"""
@@ -220,124 +214,6 @@ async def get_home():
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Homepage not found")
 
-# TTS endpoint
-@app.post("/api/text-to-speech")
-async def generate_speech(request: TTSRequest):
-    """Create a server endpoint that accepts text and returns audio URL"""
-    if not request.text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-    
-    if len(request.text) > 5000:
-        raise HTTPException(status_code=400, detail="Text too long. Maximum 5000 characters")
-    
-    try:
-        logger.info(f"Generating TTS for text length: {len(request.text)}")
-        audio_url = await generate_speech_with_timeout(
-            request.text, request.voice_id, request.style
-        )
-        
-        return {
-            "audio_url": audio_url,
-            "text": request.text,
-            "voice_id": request.voice_id,
-            "style": request.style
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"TTS generation failed: {e}")
-        raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
-
-@app.post("/api/tts/echo")
-async def tts_echo(file: UploadFile = File(...)):
-    """Transcribe audio, generate new audio with Murf, and return the audio URL."""
-    try:
-        logger.info(f"Processing echo for file: {file.filename}")
-        
-        # Validate and read file
-        audio_data = await validate_audio_file(file)
-        
-        # Transcribe with timeout
-        transcribed_text = await transcribe_with_timeout(audio_data)
-        
-        if not transcribed_text.strip():
-            return {
-                "audio_url": None,
-                "transcript": "(No speech detected)"
-            }
-
-        # Generate speech with timeout
-        audio_url = await generate_speech_with_timeout(transcribed_text)
-
-        return {
-            "audio_url": audio_url,
-            "transcript": transcribed_text
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Echo bot failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Echo Bot failed: {str(e)}")
-
-@app.post("/llm/query")
-async def llm_query_from_audio(file: UploadFile = File(...)):
-    """
-    Accepts audio, transcribes it, sends it to an LLM, 
-    and returns the LLM's response as synthesized audio. (Stateless)
-    """
-    try:
-        logger.info(f"Processing LLM query for file: {file.filename}")
-        
-        # Validate and read file
-        audio_data = await validate_audio_file(file)
-        
-        # Transcribe with timeout
-        user_text = await transcribe_with_timeout(audio_data)
-        
-        if not user_text.strip():
-            return {
-                "audio_url": None, 
-                "user_transcript": "(No speech detected)", 
-                "llm_response_text": ""
-            }
-
-        # Generate LLM response
-        prompt = f"Please provide a concise response, under 3000 characters. User query: '{user_text}'"
-        
-        try:
-            llm_text = await generate_llm_response([{"role": "user", "parts": [prompt]}])
-        except Exception:
-            llm_text = f"I heard you say: '{user_text}'. This is a test response as the LLM service is currently unavailable."
-
-        # Truncate if too long
-        if len(llm_text) > 3000:
-            llm_text = llm_text[:2900] + "..."
-
-        # Generate speech
-        try:
-            audio_url = await generate_speech_with_timeout(llm_text)
-        except Exception as e:
-            logger.error(f"Speech generation failed: {e}")
-            return {
-                "audio_url": None, 
-                "user_transcript": user_text, 
-                "llm_response_text": llm_text, 
-                "error": "TTS generation failed"
-            }
-
-        return {
-            "audio_url": audio_url, 
-            "user_transcript": user_text, 
-            "llm_response_text": llm_text
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in LLM query: {e}")
-        raise HTTPException(status_code=500, detail=f"LLM query failed: {str(e)}")
 
 @app.post("/agent/chat/{session_id}")
 async def agent_chat(session_id: str, file: UploadFile = File(...)):
