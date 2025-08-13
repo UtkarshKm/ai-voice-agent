@@ -83,14 +83,24 @@ async def validate_audio_file(file: UploadFile) -> bytes:
         raise HTTPException(status_code=400, detail="Failed to read uploaded file")
 
 async def transcribe_with_timeout(audio_data: bytes, timeout: int = API_TIMEOUT_SECONDS) -> str:
-    """Transcribe audio with timeout handling"""
+    """Transcribe audio with timeout handling and optimized polling"""
     try:
-        # Run transcription in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         
         def transcribe_sync():
-            transcriber = aai.Transcriber()
-            return transcriber.transcribe(audio_data)
+            # Create transcriber with optimized config
+            config = aai.TranscriptionConfig(
+                speech_model=aai.SpeechModel.nano,  # Faster model for real-time use
+                punctuate=True,
+                format_text=True
+            )
+            transcriber = aai.Transcriber(config=config)
+            
+            logger.info("Starting transcription...")
+            transcript = transcriber.transcribe(audio_data)
+            logger.info(f"Transcription completed with status: {transcript.status}")
+            
+            return transcript
         
         # Use asyncio.wait_for for timeout
         transcript = await asyncio.wait_for(
@@ -229,7 +239,9 @@ async def agent_chat(session_id: str, file: UploadFile = File(...)):
         audio_data = await validate_audio_file(file)
         
         # Transcribe with timeout
+        logger.info("Starting transcription process...")
         user_text = await transcribe_with_timeout(audio_data)
+        logger.info(f"Transcription result: '{user_text[:50]}{'...' if len(user_text) > 50 else ''}'")
         
         if not user_text.strip():
             return {
@@ -255,7 +267,9 @@ async def agent_chat(session_id: str, file: UploadFile = File(...)):
         # Generate LLM response with timeout
         llm_text = ""
         try:
+            logger.info("Generating LLM response...")
             llm_text = await generate_llm_response(history)
+            logger.info(f"LLM response generated: '{llm_text[:50]}{'...' if len(llm_text) > 50 else ''}'")
             # Add LLM's response to history only if successful
             history.append({"role": "model", "parts": [llm_text]})
         except Exception as genai_error:
@@ -277,7 +291,9 @@ async def agent_chat(session_id: str, file: UploadFile = File(...)):
         # Generate speech with timeout
         audio_url = None
         try:
+            logger.info("Generating speech audio...")
             audio_url = await generate_speech_with_timeout(llm_text)
+            logger.info("Speech audio generated successfully")
         except Exception as murf_error:
             logger.error(f"Speech generation failed: {murf_error}")
             return {
