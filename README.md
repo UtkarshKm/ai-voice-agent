@@ -4,10 +4,10 @@ This project is a conversational AI voice agent that listens to your questions a
 
 ## 📸 Screenshots
 
-*Include screenshots of the application here. For example:*
+
 
 *A screenshot of the main interface:*
-![AI Voice Agent Interface](httpss://i.imgur.com/YOUR_SCREENSHOT_URL.png)
+![AI Voice Agent Interface]( https://res.cloudinary.com/backend-tube/image/upload/v1755154372/Screenshot_2025-08-13_124951_zmw2xn.png )
 
 ## ✨ Features
 
@@ -65,8 +65,8 @@ Follow these instructions to set up and run the project locally.
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-username/your-repo-name.git
-    cd your-repo-name
+    git clone https://github.com/UtkarshKm/ai-voice-agent.git
+    cd ai-voice-agent
     ```
 
 2.  **Create a virtual environment and activate it:**
