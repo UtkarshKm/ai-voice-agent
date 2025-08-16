@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile, Request
+from fastapi import FastAPI, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -388,3 +388,13 @@ async def agent_chat(session_id: str, file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Unexpected error in agent chat: {e}")
         raise HTTPException(status_code=500, detail=f"Agent chat failed: {str(e)}")
+    
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f"Message text was: {data}")
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from websocket")
