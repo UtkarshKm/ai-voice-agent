@@ -392,9 +392,26 @@ async def agent_chat(session_id: str, file: UploadFile = File(...)):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    filename = f"recorded_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.wav"
+    
+    # MATCH THIS FORMAT EXACTLY (16kHz mono 16-bit PCM)
+    sample_rate = 16000
+    channels = 1
+    bits_per_sample = 16
+    
     try:
-        while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f"Message text was: {data}")
+        with wave.open(filename, 'wb') as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(bits_per_sample // 8)
+            wav_file.setframerate(sample_rate)
+            
+            while True:
+                data = await websocket.receive_bytes()  # CRITICAL CHANGE
+                wav_file.writeframes(data)
+                
+        logger.info(f"Audio saved as {filename}")
     except WebSocketDisconnect:
-        logger.info("Client disconnected from websocket")
+        logger.info(f"Client disconnected. Audio saved as {filename}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        await websocket.close()
