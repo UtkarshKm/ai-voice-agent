@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile, Request
+from fastapi import FastAPI, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -16,6 +16,7 @@ from typing import Optional
 from contextlib import asynccontextmanager
 import io
 import wave
+from transcriber import AssemblyAIStreamingTranscriber
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -388,3 +389,22 @@ async def agent_chat(session_id: str, file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Unexpected error in agent chat: {e}")
         raise HTTPException(status_code=500, detail=f"Agent chat failed: {str(e)}")
+    
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    logger.info("Client connected to WebSocket")
+    
+    transcriber = AssemblyAIStreamingTranscriber(sample_rate=16000)
+
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            transcriber.stream_audio(data)
+    except WebSocketDisconnect:
+        logger.info("Client disconnected.")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        transcriber.close()
+        logger.info("Transcription resources closed.")
