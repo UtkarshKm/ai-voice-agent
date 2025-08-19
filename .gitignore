@@ -143,3 +143,5 @@ __pypackages__/
 
 # Windows
 Thumbs.db
+
+.ruff_cache/
