@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -78,111 +78,8 @@ app = FastAPI(
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Helper functions
-def estimate_audio_duration(audio_data: bytes) -> float:
-    """Estimate audio duration from audio data"""
-    try:
-        # For WebM files, we'll estimate based on file size
-        # Rough estimate: WebM audio is ~8-16 kbps
-        estimated_duration = len(audio_data) / (12 * 1024)  # Conservative estimate
-        return min(estimated_duration, MAX_AUDIO_DURATION)
-    except:
-        return 5.0  # Default conservative estimate
-
-def is_audio_too_short(audio_data: bytes) -> bool:
-    """Check if audio is too short to be meaningful"""
-    # Very basic check - if file is smaller than ~500 bytes, likely too short
-    return len(audio_data) < 500
-
-async def validate_audio_file(file: UploadFile) -> bytes:
-    """Validate and read audio file with enhanced validation"""
-    if file.size and file.size > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413, 
-            detail=f"File too large. Maximum size: {MAX_FILE_SIZE / 1024 / 1024:.1f}MB to save credits"
-        )
-    
-    try:
-        content = await file.read()
-        if len(content) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
-            
-        # Check if audio is too short
-        if is_audio_too_short(content):
-            raise HTTPException(
-                status_code=400, 
-                detail="Audio too short. Please record at least 1 second of audio."
-            )
-            
-        # Estimate duration and warn if too long
-        estimated_duration = estimate_audio_duration(content)
-        if estimated_duration > MAX_AUDIO_DURATION:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Audio too long (est. {estimated_duration:.1f}s). Maximum: {MAX_AUDIO_DURATION}s to save credits."
-            )
-            
-        logger.info(f"Audio validated: {len(content)} bytes, estimated {estimated_duration:.1f}s")
-        return content
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"File read error: {e}")
-        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
-
-async def transcribe_with_timeout(audio_data: bytes, timeout: int = API_TIMEOUT_SECONDS) -> str:
-    """Transcribe audio with timeout handling and credit tracking"""
-    try:
-        loop = asyncio.get_event_loop()
-        
-        def transcribe_sync():
-            # Use nano model for fastest/cheapest transcription
-            config = aai.TranscriptionConfig(
-                speech_model=aai.SpeechModel.nano,  # Fastest, most cost-effective
-                punctuate=True,
-                format_text=True,
-                # Disable expensive features to save credits
-                speaker_labels=False,
-                auto_chapters=False,
-                sentiment_analysis=False,
-                entity_detection=False,
-                iab_categories=False,
-                content_safety=False
-            )
-            transcriber = aai.Transcriber(config=config)
-            
-            logger.info("Starting transcription with cost-optimized settings...")
-            transcript = transcriber.transcribe(audio_data)
-            logger.info(f"Transcription completed with status: {transcript.status}")
-            
-            # Track credit usage
-            if hasattr(transcript, 'audio_duration'):
-                duration = transcript.audio_duration
-                estimated_cost = (duration / 3600) * 0.27  # $0.27/hour
-                credit_usage["total_seconds_processed"] += duration
-                credit_usage["estimated_cost"] += estimated_cost
-                logger.info(f"Audio duration: {duration:.2f}s, Est. cost: ${estimated_cost:.4f}")
-            
-            return transcript
-        
-        transcript = await asyncio.wait_for(
-            loop.run_in_executor(None, transcribe_sync),
-            timeout=timeout
-        )
-        
-        if transcript.status == aai.TranscriptStatus.error:
-            logger.error(f"Transcription error: {transcript.error}")
-            raise HTTPException(status_code=500, detail=f"Transcription failed: {transcript.error}")
-        
-        return transcript.text or ""
-    
-    except asyncio.TimeoutError:
-        logger.error("Transcription timeout")
-        raise HTTPException(status_code=504, detail="Transcription service timeout")
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+class ChatRequest(BaseModel):
+    transcript: str
 
 async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECONDS) -> str:
     """Generate LLM response with timeout handling and streaming to console"""
@@ -317,7 +214,7 @@ async def get_home():
         raise HTTPException(status_code=404, detail="Homepage not found")
 
 @app.post("/agent/chat/{session_id}")
-async def agent_chat(session_id: str, file: UploadFile = File(...)):
+async def agent_chat(session_id: str, request: ChatRequest):
     """Handles conversational chat with an agent, maintaining history."""
     try:
         logger.info(f"Processing chat for session: {session_id}")
@@ -326,13 +223,8 @@ async def agent_chat(session_id: str, file: UploadFile = File(...)):
         if not session_id or len(session_id) < 10:
             raise HTTPException(status_code=400, detail="Invalid session ID")
         
-        # Enhanced audio validation to save credits
-        audio_data = await validate_audio_file(file)
-        
-        # Transcribe with timeout and cost tracking
-        logger.info("Starting transcription process...")
-        user_text = await transcribe_with_timeout(audio_data)
-        logger.info(f"Transcription result: '{user_text[:50]}{'...' if len(user_text) > 50 else ''}'")
+        user_text = request.transcript
+        logger.info(f"Received transcript: '{user_text[:50]}{'...' if len(user_text) > 50 else ''}'")
         
         if not user_text.strip():
             return {
