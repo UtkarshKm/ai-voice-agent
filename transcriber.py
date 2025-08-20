@@ -38,7 +38,7 @@ class AssemblyAIStreamingTranscriber:
 
     def on_turn(self, _: StreamingClient, event: TurnEvent):
         print(f"{event.transcript} (end_of_turn={event.end_of_turn})")
-        if event.end_of_turn:
+        if event.end_of_turn and event.turn_is_formatted:
             coro = self.websocket.send_text(
                 json.dumps({"type": "transcript", "data": event.transcript})
             )
