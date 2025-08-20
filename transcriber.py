@@ -33,10 +33,10 @@ class AssemblyAIStreamingTranscriber:
 
         self.client.connect(StreamingParameters(sample_rate=sample_rate, format_turns=True))
 
-    def on_begin(self, event: BeginEvent):
+    def on_begin(self, _: StreamingClient, event: BeginEvent):
         print(f"Session started: {event.id}")
 
-    def on_turn(self, event: TurnEvent):
+    def on_turn(self, _: StreamingClient, event: TurnEvent):
         print(f"{event.transcript} (end_of_turn={event.end_of_turn})")
         if event.end_of_turn:
             coro = self.websocket.send_text(
@@ -44,10 +44,10 @@ class AssemblyAIStreamingTranscriber:
             )
             asyncio.run_coroutine_threadsafe(coro, self.loop)
 
-    def on_termination(self, event: TerminationEvent):
+    def on_termination(self, _: StreamingClient, event: TerminationEvent):
         print(f"Session terminated after {event.audio_duration_seconds} s")
 
-    def on_error(self, error: StreamingError):
+    def on_error(self, _: StreamingClient, error: StreamingError):
         print("Error:", error)
 
     def stream_audio(self, audio_chunk: bytes):
