@@ -111,6 +111,13 @@ const recordBtn = document.getElementById("record-button");
 
     const updateUI = () => {
         recordBtn.dataset.state = state;
+
+        // Remove all state-specific classes first
+        recordBtn.classList.remove(
+            'bg-blue-600', 'hover:bg-blue-700',
+            'pulse-ring', 'bg-red-600', 'hover:bg-red-700'
+        );
+
         switch (state) {
             case 'idle':
                 statusEl.textContent = "Click to start recording";
