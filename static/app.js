@@ -111,6 +111,13 @@ const recordBtn = document.getElementById("record-button");
 
     const updateUI = () => {
         recordBtn.dataset.state = state;
+
+        // Remove all state-specific classes first
+        recordBtn.classList.remove(
+            'bg-blue-600', 'hover:bg-blue-700',
+            'pulse-ring', 'bg-red-600', 'hover:bg-red-700'
+        );
+
         switch (state) {
             case 'idle':
                 statusEl.textContent = "Click to start recording";
@@ -156,6 +163,12 @@ const recordBtn = document.getElementById("record-button");
             websocket = new WebSocket(`ws://${window.location.host}/ws`);
             websocket.onopen = () => console.log("WebSocket connected");
             websocket.onerror = (e) => console.error("WebSocket error", e);
+            websocket.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                if (message.type === 'transcript') {
+                    displayTranscript(message.data);
+                }
+            };
             
             setState('recording');
             
@@ -180,6 +193,14 @@ const recordBtn = document.getElementById("record-button");
         }
         
         setState('idle');
+    };
+
+    const displayTranscript = (transcript) => {
+        const transcriptEl = document.createElement('div');
+        transcriptEl.className = 'p-4 bg-gray-100 dark:bg-gray-700 rounded-lg mb-4';
+        transcriptEl.textContent = transcript;
+        conversationEl.appendChild(transcriptEl);
+        conversationEl.scrollTop = conversationEl.scrollHeight;
     };
 
     recordBtn.addEventListener('click', () => {

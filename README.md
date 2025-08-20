@@ -118,6 +118,47 @@ The FastAPI backend provides the following endpoints:
 *   `GET /usage`: An endpoint to get the total estimated cost and processed audio seconds.
 *   `GET /static/{path}`: Serves static files (CSS, JavaScript).
 
+---
+
+## Turn Detection Feature
+
+A key feature of this application is **real-time transcription with turn detection**, which allows the application to wait until a user has finished speaking before displaying the final, formatted transcript.
+
+### How Turn Detection Works
+
+The real-time transcription and turn detection feature is built around a WebSocket connection between the client (browser) and the server (FastAPI).
+
+1.  **Audio Streaming from Client:**
+    - The user clicks the "record" button in the browser.
+    - The JavaScript in `static/app.js` captures microphone audio, encodes it into 16-bit PCM format, and sends it in chunks over a WebSocket to the `/ws` endpoint on the server.
+
+2.  **Server-Side Transcription:**
+    - The FastAPI server receives the audio chunks on the WebSocket.
+    - In `main.py`, the `websocket_endpoint` passes the audio stream to an instance of `AssemblyAIStreamingTranscriber` (defined in `transcriber.py`).
+    - The `transcriber` class establishes a connection with AssemblyAI's real-time transcription service and forwards the audio stream. For this to work, `format_turns=True` is enabled in the connection parameters.
+
+3.  **Handling AssemblyAI Events:**
+    - The `AssemblyAIStreamingTranscriber` listens for events from the AssemblyAI service. The most important one for this feature is the `TurnEvent`.
+    - AssemblyAI sends multiple `TurnEvent` messages. When `format_turns` is enabled, it sends an initial unformatted transcript when the user stops talking, followed by a final, formatted transcript.
+    - The `on_turn` event handler in `transcriber.py` contains logic to check for two conditions on the event object:
+        - `event.end_of_turn` is `True`.
+        - `event.turn_is_formatted` is `True`.
+    - This ensures we only act on the final, formatted version of the transcript.
+
+4.  **Sending Transcript to Client:**
+    - When the final formatted transcript is received, the `on_turn` handler sends it back to the client over the same WebSocket connection. The message is a JSON object like: `{"type": "transcript", "data": "Hello. How are you?"}`.
+
+5.  **Displaying on the UI:**
+    - The `websocket.onmessage` handler in `static/app.js` listens for incoming messages.
+    - If the message `type` is `transcript`, the JavaScript creates a new `div` element and displays the transcript text in the conversation area on the webpage.
+
+### Key Files for Turn Detection
+
+-   **`transcriber.py`**: Contains the `AssemblyAIStreamingTranscriber` class, which manages the connection to AssemblyAI and includes the event handlers (`on_turn`, `on_error`, etc.). This is where the core turn detection logic resides.
+-   **`main.py`**: Sets up the FastAPI server and the `/ws` WebSocket endpoint. It orchestrates the flow of data from the client to the transcriber.
+-   **`static/app.js`**: All client-side logic for recording audio, managing the WebSocket connection, and updating the UI with the final transcript.
+-   **`static/index.html`**: The HTML structure of the application, including the container where transcripts are displayed.
+
 ## 🙏 Acknowledgements
 
 *   This project was created by **Utkarsh Kumawat**.
