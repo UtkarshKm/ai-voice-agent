@@ -185,15 +185,26 @@ async def transcribe_with_timeout(audio_data: bytes, timeout: int = API_TIMEOUT_
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
 async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECONDS) -> str:
-    """Generate LLM response with timeout handling"""
+    """Generate LLM response with timeout handling and streaming to console"""
     try:
         loop = asyncio.get_event_loop()
         
         def generate_sync():
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            response = model.generate_content(history)
-            return response.text
-        
+            model = genai.GenerativeModel('gemini-1.5-flash')
+
+            logger.info("Starting LLM stream generation...")
+            responses = model.generate_content(history, stream=True)
+
+            accumulated_response = ""
+            for response in responses:
+                if hasattr(response, 'text') and response.text:
+                    print(response.text, end="", flush=True)
+                    accumulated_response += response.text
+
+            print() # Newline after streaming is complete
+            logger.info("LLM stream generation complete.")
+            return accumulated_response
+
         llm_text = await asyncio.wait_for(
             loop.run_in_executor(None, generate_sync),
             timeout=timeout
@@ -206,7 +217,8 @@ async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECOND
         raise HTTPException(status_code=504, detail="LLM service timeout")
     except Exception as e:
         logger.error(f"LLM generation error: {e}")
-        raise e
+        # Ensure we don't expose internal errors to the client
+        raise HTTPException(status_code=500, detail="LLM service failed")
 
 async def generate_speech_with_timeout(text: str, voice_id: str = "en-US-ken", 
                                      style: str = "Conversational", 
