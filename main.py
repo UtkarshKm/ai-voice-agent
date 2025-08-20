@@ -395,7 +395,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Client connected to WebSocket")
     
-    transcriber = AssemblyAIStreamingTranscriber(sample_rate=16000)
+    transcriber = AssemblyAIStreamingTranscriber(websocket=websocket, sample_rate=16000)
 
     try:
         while True:

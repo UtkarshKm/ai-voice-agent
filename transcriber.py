@@ -11,36 +11,44 @@ from assemblyai.streaming.v3 import (
     StreamingError,
 )
 import os
+import json
+import asyncio
+from fastapi import WebSocket
+
 aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
 
-def on_begin(self, event: BeginEvent):
-    print(f"Session started: {event.id}")
-
-def on_turn(self, event: TurnEvent):
-    print(f"{event.transcript} (end_of_turn={event.end_of_turn})")
-    if event.end_of_turn and not event.turn_is_formatted:
-        params = StreamingSessionParameters(format_turns=True)
-        # self.set_params(params) # This is not available in the new SDK
-
-def on_termination(self, event: TerminationEvent):
-    print(f"Session terminated after {event.audio_duration_seconds} s")
-
-def on_error(self, error: StreamingError):
-    print("Error:", error)
-
 class AssemblyAIStreamingTranscriber:
-    def __init__(self, sample_rate=16000):
+    def __init__(self, websocket: WebSocket, sample_rate=16000):
+        self.websocket = websocket
+        self.loop = asyncio.get_event_loop()
         self.client = StreamingClient(
             StreamingClientOptions(
-                api_key=aai.settings.api_key,api_host="streaming.assemblyai.com"
-                )
+                api_key=aai.settings.api_key, api_host="streaming.assemblyai.com"
+            )
         )
-        self.client.on(StreamingEvents.Begin, on_begin)
-        self.client.on(StreamingEvents.Turn, on_turn)
-        self.client.on(StreamingEvents.Termination, on_termination)
-        self.client.on(StreamingEvents.Error, on_error)
+        self.client.on(StreamingEvents.Begin, self.on_begin)
+        self.client.on(StreamingEvents.Turn, self.on_turn)
+        self.client.on(StreamingEvents.Termination, self.on_termination)
+        self.client.on(StreamingEvents.Error, self.on_error)
 
-        self.client.connect(StreamingParameters(sample_rate=sample_rate, format_turns=False))
+        self.client.connect(StreamingParameters(sample_rate=sample_rate, format_turns=True))
+
+    def on_begin(self, event: BeginEvent):
+        print(f"Session started: {event.id}")
+
+    def on_turn(self, event: TurnEvent):
+        print(f"{event.transcript} (end_of_turn={event.end_of_turn})")
+        if event.end_of_turn:
+            coro = self.websocket.send_text(
+                json.dumps({"type": "transcript", "data": event.transcript})
+            )
+            asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+    def on_termination(self, event: TerminationEvent):
+        print(f"Session terminated after {event.audio_duration_seconds} s")
+
+    def on_error(self, error: StreamingError):
+        print("Error:", error)
 
     def stream_audio(self, audio_chunk: bytes):
         self.client.stream(audio_chunk)
