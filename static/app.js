@@ -91,7 +91,7 @@ function showNotification(message, type = 'info', duration = 5000) {
 
 // --- Conversational AI Logic ---
 (function setupLlmQueryBot() {
-const recordBtn = document.getElementById("record-button");
+    const recordBtn = document.getElementById("record-button");
     const statusEl = document.getElementById("llmStatus");
     const conversationEl = document.getElementById("llmConversation");
 
@@ -103,6 +103,7 @@ const recordBtn = document.getElementById("record-button");
     let websocket = null;
     let audioContext = null;
     let state = 'idle';
+    let fullTranscript = '';
 
     const setState = (newState) => {
         state = newState;
@@ -111,46 +112,43 @@ const recordBtn = document.getElementById("record-button");
 
     const updateUI = () => {
         recordBtn.dataset.state = state;
-
-        // Remove all state-specific classes first
         recordBtn.classList.remove(
-            'bg-blue-600', 'hover:bg-blue-700',
-            'pulse-ring', 'bg-red-600', 'hover:bg-red-700'
+            'bg-blue-600', 'hover:bg-blue-700', 'pulse-ring',
+            'bg-red-600', 'hover:bg-red-700', 'bg-gray-400', 'cursor-not-allowed'
         );
 
         switch (state) {
             case 'idle':
                 statusEl.textContent = "Click to start recording";
                 recordBtn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+                recordBtn.disabled = false;
                 break;
             case 'recording':
                 statusEl.textContent = "Recording... Click to stop";
                 recordBtn.classList.add('pulse-ring', 'bg-red-600', 'hover:bg-red-700');
+                recordBtn.disabled = false;
+                break;
+            case 'processing':
+                statusEl.textContent = "Processing...";
+                recordBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
+                recordBtn.disabled = true;
                 break;
         }
     };
 
     const startRecording = async () => {
         if (state !== 'idle') return;
+        setState('recording');
+        fullTranscript = ''; // Reset transcript
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            
-            // MATCH SERVER FORMAT (16kHz mono)
             audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             const source = audioContext.createMediaStreamSource(stream);
-            
             const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
             processor.onaudioprocess = (event) => {
-                const floatData = event.inputBuffer.getChannelData(0);
-                const pcmData = new Int16Array(floatData.length);
-                
-                // CONVERT TO 16-BIT PCM
-                for (let i = 0; i < floatData.length; i++) {
-                    pcmData[i] = floatData[i] * 32767;
-                }
-                
-                // SEND RAW PCM OVER WEBSOCKET
+                const pcmData = new Int16Array(event.inputBuffer.getChannelData(0).map(f => f * 32767));
                 if (websocket && websocket.readyState === WebSocket.OPEN) {
                     websocket.send(pcmData.buffer);
                 }
@@ -159,19 +157,16 @@ const recordBtn = document.getElementById("record-button");
             source.connect(processor);
             processor.connect(audioContext.destination);
 
-            // CONNECT TO SERVER WEBSOCKET
             websocket = new WebSocket(`ws://${window.location.host}/ws`);
             websocket.onopen = () => console.log("WebSocket connected");
             websocket.onerror = (e) => console.error("WebSocket error", e);
             websocket.onmessage = (event) => {
                 const message = JSON.parse(event.data);
-                if (message.type === 'transcript') {
-                    displayTranscript(message.data);
+                if (message.type === 'transcript' && message.data) {
+                    displayPartialTranscript(message.data);
+                    fullTranscript += message.data + ' ';
                 }
             };
-            
-            setState('recording');
-            
         } catch (err) {
             console.error("Microphone error", err);
             showNotification("Microphone access denied", "error");
@@ -181,8 +176,8 @@ const recordBtn = document.getElementById("record-button");
 
     const stopRecording = () => {
         if (state !== 'recording') return;
-        
-        // CLEAN UP RESOURCES
+        setState('processing');
+
         if (websocket) {
             websocket.close();
             websocket = null;
@@ -191,16 +186,79 @@ const recordBtn = document.getElementById("record-button");
             audioContext.close();
             audioContext = null;
         }
-        
-        setState('idle');
+
+        if (fullTranscript.trim()) {
+            displayFinalTranscript(fullTranscript);
+            sendTranscriptToAgent(fullTranscript);
+        } else {
+            showNotification("No speech detected.", "warning");
+            setState('idle');
+        }
     };
 
-    const displayTranscript = (transcript) => {
-        const transcriptEl = document.createElement('div');
-        transcriptEl.className = 'p-4 bg-gray-100 dark:bg-gray-700 rounded-lg mb-4';
-        transcriptEl.textContent = transcript;
-        conversationEl.appendChild(transcriptEl);
+    const sendTranscriptToAgent = async (transcript) => {
+        try {
+            const response = await fetchWithRetry(`/agent/chat/${window.chatSessionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ transcript: transcript.trim() }),
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                showNotification(`Error: ${data.llm_response_text}`, 'error');
+            } else {
+                displayLlmResponse(data.llm_response_text);
+                if (data.audio_url) {
+                    playAudio(data.audio_url);
+                }
+            }
+        } catch (error) {
+            console.error("Error sending transcript:", error);
+            showNotification("Failed to get response from agent.", "error");
+        } finally {
+            setState('idle');
+        }
+    };
+
+    const displayPartialTranscript = (text) => {
+        let el = document.getElementById('partial-transcript');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'partial-transcript';
+            el.className = 'p-4 bg-gray-100 dark:bg-gray-700 rounded-lg mb-4 opacity-60';
+            conversationEl.appendChild(el);
+        }
+        el.textContent = text;
         conversationEl.scrollTop = conversationEl.scrollHeight;
+    };
+
+    const displayFinalTranscript = (text) => {
+        let partialEl = document.getElementById('partial-transcript');
+        if (partialEl) partialEl.remove();
+
+        const el = document.createElement('div');
+        el.className = 'p-4 bg-gray-200 dark:bg-gray-800 rounded-lg mb-4 text-right';
+        el.innerHTML = `<strong class="font-semibold block text-blue-600 dark:text-blue-400">You</strong>${text}`;
+        conversationEl.appendChild(el);
+        conversationEl.scrollTop = conversationEl.scrollHeight;
+    };
+
+    const displayLlmResponse = (text) => {
+        const el = document.createElement('div');
+        el.className = 'p-4 bg-blue-50 dark:bg-blue-900/50 rounded-lg mb-4';
+        el.innerHTML = `<strong class="font-semibold block text-green-600 dark:text-green-400">AI Agent</strong>${text}`;
+        conversationEl.appendChild(el);
+        conversationEl.scrollTop = conversationEl.scrollHeight;
+    };
+
+    const playAudio = (url) => {
+        const audio = new Audio(url);
+        audio.play().catch(e => {
+            console.error("Audio playback failed:", e);
+            showNotification("Could not play audio response.", "warning");
+        });
     };
 
     recordBtn.addEventListener('click', () => {
