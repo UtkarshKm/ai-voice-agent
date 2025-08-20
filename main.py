@@ -95,10 +95,8 @@ async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECOND
             accumulated_response = ""
             for response in responses:
                 if hasattr(response, 'text') and response.text:
-                    print(response.text, end="", flush=True)
+                    logger.info(f"LLM chunk: {response.text}")
                     accumulated_response += response.text
-
-            print() # Newline after streaming is complete
             logger.info("LLM stream generation complete.")
             return accumulated_response
 

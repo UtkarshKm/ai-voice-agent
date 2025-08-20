@@ -34,19 +34,41 @@ This project is a conversational AI voice agent that listens to your questions a
 *   **[Tailwind CSS](https://tailwindcss.com/):** A utility-first CSS framework for rapid UI development.
 *   **MediaRecorder API:** A browser API used to record audio from the user's microphone.
 
-## 🏗️ Architecture
+## How it Works
 
-The application follows a client-server architecture:
+The application uses a combination of real-time speech-to-text, a generative AI model, and a text-to-speech service to create a seamless conversational experience. Here is the step-by-step flow:
 
-1.  **Client (Frontend):** A static single-page application built with HTML, Tailwind CSS, and JavaScript. It captures audio from the user's microphone, sends it to the backend, and plays the AI's audio response.
-2.  **Server (Backend):** A FastAPI application that orchestrates the AI services:
-    *   It receives the audio data from the client.
-    *   It sends the audio to **AssemblyAI** for transcription.
-    *   It takes the transcribed text and sends it to the **Google Gemini** model, along with the conversation history, to generate a response.
-    *   It sends the AI's text response to **Murf AI** to generate a spoken version of the response.
-    *   It returns the URL of the generated audio and the text of the conversation to the client.
+1.  **Real-time Transcription:**
+    *   When you click the "Record" button, your browser captures your microphone audio and sends it to the backend over a WebSocket connection.
+    *   The backend forwards the audio stream to **AssemblyAI**, which performs real-time transcription.
+    *   The transcribed text is sent back to the browser in chunks and displayed on the screen for immediate feedback.
 
-Session management is handled by passing a unique `session_id` from the client with each request. The server stores the conversation history for each session in memory.
+2.  **Sending the Final Transcript:**
+    *   While the real-time transcription is happening, the browser accumulates the full transcript.
+    *   When you click the "Stop" button, the WebSocket connection is closed, and the final, complete transcript is sent to the backend's main conversational agent endpoint (`/agent/chat/{session_id}`).
+
+3.  **Generating an AI Response:**
+    *   The backend receives the transcript and adds it to the conversation history.
+    *   This history is then sent to the **Google Gemini** model to generate an intelligent response.
+    *   As the Gemini model generates its response, the text is streamed to the backend's console logs.
+
+4.  **Creating the Spoken Response:**
+    *   The backend waits for the full text response from Gemini and then sends it to **Murf AI** to convert it into natural-sounding speech.
+    *   Murf AI returns a URL for the generated audio file.
+
+5.  **Displaying the Final Answer:**
+    *   The backend sends a final JSON response to the browser, containing both the LLM's text response and the URL for the spoken audio.
+    *   The browser then displays the text in the chat window and plays the audio, completing the conversation loop.
+
+## Key Changes (July 2024)
+
+This application was recently updated to fix a critical bug in the application flow and to enhance the backend's functionality.
+
+*   **Fixed Application Flow:** The frontend is now correctly connected to the backend agent. Previously, the real-time transcription was displayed but never sent to the LLM for a response. The frontend now captures the final transcript and sends it to the backend to be processed.
+
+*   **Backend Refactoring:** The main conversational endpoint (`/agent/chat/{session_id}`) has been refactored. It now accepts a text transcript directly in a JSON payload, making it more efficient. The previous implementation required the backend to accept an audio file and perform its own redundant transcription.
+
+*   **LLM Response Streaming:** The backend now streams the response from the Google Gemini API. As the response is being generated, the text chunks are printed to the server's console logs in real-time. This is useful for debugging and observing the AI's response generation.
 
 ## 🚀 Getting Started
 
@@ -113,51 +135,11 @@ You should now be able to interact with the AI Voice Agent.
 The FastAPI backend provides the following endpoints:
 
 *   `GET /`: Serves the main HTML page.
-*   `POST /agent/chat/{session_id}`: The main endpoint for handling voice chats. It accepts an audio file and returns the AI's response.
+*   `POST /agent/chat/{session_id}`: The main endpoint for handling voice chats. It now accepts a JSON body with a `transcript` field and returns the AI's response.
 *   `GET /health`: A health check endpoint that returns the status of the application and current credit usage.
 *   `GET /usage`: An endpoint to get the total estimated cost and processed audio seconds.
 *   `GET /static/{path}`: Serves static files (CSS, JavaScript).
-
----
-
-## Turn Detection Feature
-
-A key feature of this application is **real-time transcription with turn detection**, which allows the application to wait until a user has finished speaking before displaying the final, formatted transcript.
-
-### How Turn Detection Works
-
-The real-time transcription and turn detection feature is built around a WebSocket connection between the client (browser) and the server (FastAPI).
-
-1.  **Audio Streaming from Client:**
-    - The user clicks the "record" button in the browser.
-    - The JavaScript in `static/app.js` captures microphone audio, encodes it into 16-bit PCM format, and sends it in chunks over a WebSocket to the `/ws` endpoint on the server.
-
-2.  **Server-Side Transcription:**
-    - The FastAPI server receives the audio chunks on the WebSocket.
-    - In `main.py`, the `websocket_endpoint` passes the audio stream to an instance of `AssemblyAIStreamingTranscriber` (defined in `transcriber.py`).
-    - The `transcriber` class establishes a connection with AssemblyAI's real-time transcription service and forwards the audio stream. For this to work, `format_turns=True` is enabled in the connection parameters.
-
-3.  **Handling AssemblyAI Events:**
-    - The `AssemblyAIStreamingTranscriber` listens for events from the AssemblyAI service. The most important one for this feature is the `TurnEvent`.
-    - AssemblyAI sends multiple `TurnEvent` messages. When `format_turns` is enabled, it sends an initial unformatted transcript when the user stops talking, followed by a final, formatted transcript.
-    - The `on_turn` event handler in `transcriber.py` contains logic to check for two conditions on the event object:
-        - `event.end_of_turn` is `True`.
-        - `event.turn_is_formatted` is `True`.
-    - This ensures we only act on the final, formatted version of the transcript.
-
-4.  **Sending Transcript to Client:**
-    - When the final formatted transcript is received, the `on_turn` handler sends it back to the client over the same WebSocket connection. The message is a JSON object like: `{"type": "transcript", "data": "Hello. How are you?"}`.
-
-5.  **Displaying on the UI:**
-    - The `websocket.onmessage` handler in `static/app.js` listens for incoming messages.
-    - If the message `type` is `transcript`, the JavaScript creates a new `div` element and displays the transcript text in the conversation area on the webpage.
-
-### Key Files for Turn Detection
-
--   **`transcriber.py`**: Contains the `AssemblyAIStreamingTranscriber` class, which manages the connection to AssemblyAI and includes the event handlers (`on_turn`, `on_error`, etc.). This is where the core turn detection logic resides.
--   **`main.py`**: Sets up the FastAPI server and the `/ws` WebSocket endpoint. It orchestrates the flow of data from the client to the transcriber.
--   **`static/app.js`**: All client-side logic for recording audio, managing the WebSocket connection, and updating the UI with the final transcript.
--   **`static/index.html`**: The HTML structure of the application, including the container where transcripts are displayed.
+*   `WEBSOCKET /ws`: The endpoint for real-time transcription.
 
 ## 🙏 Acknowledgements
 
