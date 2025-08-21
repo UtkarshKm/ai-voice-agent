@@ -118,6 +118,7 @@ async def stream_llm_to_murf(text_stream):
     uri = f"{WS_URL}?api-key={API_KEY}&sample_rate=44100&channel_type=MONO&format=WAV"
     logger.info("Connecting to Murf WebSocket...")
     full_text = ""
+    audio_chunks = []
 
     try:
         async with websockets.connect(uri) as ws:
@@ -176,6 +177,12 @@ async def stream_llm_to_murf(text_stream):
 
             # 5. Wait for the receiver to finish processing all audio
             await receiver_task
+
+            # Now, join and print the complete base64 audio string
+            if audio_chunks:
+                complete_audio = "".join(audio_chunks)
+                print(f"Final Base64 Audio String: {complete_audio}")
+
             logger.info("Murf streaming finished.")
 
     except Exception as e:
