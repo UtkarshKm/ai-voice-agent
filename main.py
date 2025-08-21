@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from murf import Murf
 import os
 from dotenv import load_dotenv
 import assemblyai as aai
@@ -12,10 +11,10 @@ import threading
 import time
 import asyncio
 import logging
-from typing import Optional
+import websockets
+import json
+from typing import AsyncGenerator
 from contextlib import asynccontextmanager
-import io
-import wave
 from transcriber import AssemblyAIStreamingTranscriber
 
 # Configure logging
@@ -44,9 +43,6 @@ chat_histories = {}
 
 # Credit tracking (optional - for monitoring)
 credit_usage = {"total_seconds_processed": 0, "estimated_cost": 0.0}
-
-# Initialize Murf client
-client = Murf(api_key=os.getenv("MURF_API_KEY"))
 
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
@@ -81,70 +77,110 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class ChatRequest(BaseModel):
     transcript: str
 
-async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECONDS) -> str:
-    """Generate LLM response with timeout handling and streaming to console"""
+async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECONDS) -> AsyncGenerator[str, None]:
+    """Generate LLM response as an async stream with timeout handling."""
     try:
-        loop = asyncio.get_event_loop()
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        def generate_sync():
-            model = genai.GenerativeModel('gemini-1.5-flash')
-
-            logger.info("Starting LLM stream generation...")
-            responses = model.generate_content(history, stream=True)
-
-            accumulated_response = ""
-            for response in responses:
+        async def internal_generator():
+            logger.info("Starting LLM async stream generation...")
+            # The API call is awaited and returns an async generator
+            async for response in await model.generate_content_async(history, stream=True):
                 if hasattr(response, 'text') and response.text:
                     logger.info(f"LLM chunk: {response.text}")
-                    accumulated_response += response.text
-            logger.info("LLM stream generation complete.")
-            return accumulated_response
+                    yield response.text
+            logger.info("LLM async stream generation complete.")
 
-        llm_text = await asyncio.wait_for(
-            loop.run_in_executor(None, generate_sync),
-            timeout=timeout
-        )
-        
-        return llm_text
-    
+        # Use asyncio.timeout to apply a timeout to the async generator
+        async with asyncio.timeout(timeout):
+            async for chunk in internal_generator():
+                yield chunk
+
     except asyncio.TimeoutError:
         logger.error("LLM generation timeout")
+        # Re-raise as HTTPException for the FastAPI framework to handle
         raise HTTPException(status_code=504, detail="LLM service timeout")
     except Exception as e:
         logger.error(f"LLM generation error: {e}")
-        # Ensure we don't expose internal errors to the client
+        # Re-raise as HTTPException
         raise HTTPException(status_code=500, detail="LLM service failed")
 
-async def generate_speech_with_timeout(text: str, voice_id: str = "en-US-ken", 
-                                     style: str = "Conversational", 
-                                     timeout: int = API_TIMEOUT_SECONDS) -> str:
-    """Generate speech with timeout handling"""
+async def stream_llm_to_murf(text_stream):
+    """Streams text to Murf TTS WebSocket and prints base64 audio to console."""
+    WS_URL = "wss://api.murf.ai/v1/speech/stream-input"
+    API_KEY = os.getenv("MURF_API_KEY")
+    CONTEXT_ID = "my_static_context_id_for_streaming"  # Using a static context ID
+
+    if not API_KEY:
+        logger.error("MURF_API_KEY environment variable not set.")
+        return ""
+
+    uri = f"{WS_URL}?api-key={API_KEY}&sample_rate=44100&channel_type=MONO&format=WAV"
+    logger.info("Connecting to Murf WebSocket...")
+    full_text = ""
+
     try:
-        # Truncate text to save on TTS costs
-        if len(text) > 2000:
-            text = text[:1900] + "... (response truncated to save costs)"
-            
-        loop = asyncio.get_event_loop()
-        
-        def generate_speech_sync():
-            response = client.text_to_speech.generate(
-                text=text, voice_id=voice_id, style=style
-            )
-            return response.audio_file
-        
-        audio_url = await asyncio.wait_for(
-            loop.run_in_executor(None, generate_speech_sync),
-            timeout=timeout
-        )
-        
-        return audio_url
-    
-    except asyncio.TimeoutError:
-        logger.error("Speech generation timeout")
-        raise HTTPException(status_code=504, detail="Speech generation service timeout")
+        async with websockets.connect(uri) as ws:
+            logger.info("Murf WebSocket connected.")
+            # 1. Send voice configuration
+            voice_config_msg = {
+                "context_id": CONTEXT_ID,
+                "voice_config": {
+                    "voiceId": "en-US-amara",
+                    "style": "Conversational",
+                }
+            }
+            await ws.send(json.dumps(voice_config_msg))
+            logger.info("Sent voice config to Murf.")
+
+            # 2. Create a task to receive audio data
+            async def receiver(websocket):
+                while True:
+                    try:
+                        response = await websocket.recv()
+                        data = json.loads(response)
+                        if "audio" in data and data["audio"]:
+                            # As requested, print the base64 encoded audio to the console
+                            print(f"Received audio chunk (base64): {data['audio']}")
+                        if data.get("final", False):
+                            logger.info("Received final audio packet from Murf.")
+                            break
+                    except websockets.exceptions.ConnectionClosed:
+                        logger.warning("Murf WebSocket connection closed by server.")
+                        break
+                    except Exception as e:
+                        logger.error(f"Error receiving from Murf: {e}")
+                        break
+
+            receiver_task = asyncio.create_task(receiver(ws))
+
+            # 3. Send text chunks from the LLM stream
+            async for chunk in text_stream:
+                if chunk:
+                    full_text += chunk
+                    text_msg = {
+                        "context_id": CONTEXT_ID,
+                        "text": chunk
+                    }
+                    await ws.send(json.dumps(text_msg))
+            logger.info("Finished sending LLM text stream to Murf.")
+
+            # 4. Signal the end of the text stream
+            end_msg = {
+                "context_id": CONTEXT_ID,
+                "end": True
+            }
+            await ws.send(json.dumps(end_msg))
+            logger.info("Sent end-of-stream signal to Murf.")
+
+            # 5. Wait for the receiver to finish processing all audio
+            await receiver_task
+            logger.info("Murf streaming finished.")
+
     except Exception as e:
-        logger.error(f"Speech generation error: {e}")
-        raise HTTPException(status_code=500, detail=f"Speech generation failed: {str(e)}")
+        logger.error(f"Error during Murf WebSocket streaming: {e}")
+
+    return full_text
 
 def manage_conversation_history(history: list) -> list:
     """Manage conversation history length"""
@@ -243,17 +279,30 @@ async def agent_chat(session_id: str, request: ChatRequest):
         history.append({"role": "user", "parts": [user_text]})
         history = manage_conversation_history(history)
 
-        # Generate LLM response
+        # Generate LLM response and stream to TTS
         llm_text = ""
         try:
-            logger.info("Generating LLM response...")
-            llm_text = await generate_llm_response(history)
-            logger.info(f"LLM response generated: '{llm_text[:50]}{'...' if len(llm_text) > 50 else ''}'")
-            history.append({"role": "model", "parts": [llm_text]})
-        except Exception as genai_error:
-            logger.error(f"GenAI Error: {genai_error}")
-            llm_text = f"I heard: '{user_text}'. The AI service is temporarily unavailable."
-            history.pop()  # Remove user message if LLM fails
+            logger.info("Starting LLM and TTS streaming pipeline...")
+            llm_stream = generate_llm_response(history)
+            llm_text = await stream_llm_to_murf(llm_stream)
+
+            if llm_text:
+                logger.info(f"Full LLM response received: '{llm_text[:50]}{'...' if len(llm_text) > 50 else ''}'")
+                history.append({"role": "model", "parts": [llm_text]})
+            else:
+                logger.warning("LLM response was empty after streaming.")
+                # Handle case where LLM or Murf fails and returns empty
+                llm_text = "I tried to respond, but encountered an issue. Please try again."
+                history.append({"role": "model", "parts": [llm_text]})
+
+        except HTTPException:
+            # Re-raise HTTP exceptions from downstream services (LLM, etc.)
+            raise
+        except Exception as e:
+            logger.error(f"Error in streaming pipeline: {e}")
+            llm_text = f"I heard: '{user_text}'. An unexpected error occurred."
+            # Pop the user message as the model failed to produce a valid response
+            history.pop()
 
         # Update session data
         chat_histories[session_id] = {
@@ -261,23 +310,10 @@ async def agent_chat(session_id: str, request: ChatRequest):
             "last_accessed": datetime.now()
         }
 
-        # Generate speech
-        audio_url = None
-        try:
-            logger.info("Generating speech audio...")
-            audio_url = await generate_speech_with_timeout(llm_text)
-            logger.info("Speech audio generated successfully")
-        except Exception as murf_error:
-            logger.error(f"Speech generation failed: {murf_error}")
-            return {
-                "audio_url": None, 
-                "user_transcript": user_text, 
-                "llm_response_text": llm_text, 
-                "error": "TTS generation failed"
-            }
-
+        # The audio has been streamed to the console.
+        # Return the final text response to the client.
         return {
-            "audio_url": audio_url, 
+            "audio_url": None, # No longer sending an audio URL
             "user_transcript": user_text, 
             "llm_response_text": llm_text,
             "usage": {
