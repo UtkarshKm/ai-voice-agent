@@ -141,7 +141,8 @@ async def stream_llm_to_murf(text_stream):
                         data = json.loads(response)
                         if "audio" in data and data["audio"]:
                             # As requested, print the base64 encoded audio to the console
-                            print(f"Received audio chunk (base64): {data['audio']}")
+                            # print(f"Received audio chunk (base64): {data['audio']}")
+                            print(f"Received audio chunk (base64)")
                         if data.get("final", False):
                             logger.info("Received final audio packet from Murf.")
                             break
