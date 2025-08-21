@@ -47,18 +47,16 @@ The application uses a combination of real-time speech-to-text, a generative AI 
     *   While the real-time transcription is happening, the browser accumulates the full transcript.
     *   When you click the "Stop" button, the WebSocket connection is closed, and the final, complete transcript is sent to the backend's main conversational agent endpoint (`/agent/chat/{session_id}`).
 
-3.  **Generating an AI Response:**
-    *   The backend receives the transcript and adds it to the conversation history.
-    *   This history is then sent to the **Google Gemini** model to generate an intelligent response.
-    *   As the Gemini model generates its response, the text is streamed to the backend's console logs.
+3.  **Generating an AI Response and Streaming Audio:**
+    *   The backend receives the transcript and sends it to the **Google Gemini** model to generate an intelligent response.
+    *   Instead of waiting for the full response, the backend receives the LLM's response as a **stream of text chunks**.
+    *   As each text chunk is received from Gemini, it is immediately forwarded to **Murf AI's WebSocket API** for real-time text-to-speech conversion.
+    *   Murf streams back the audio as base64-encoded chunks, which are then printed to the backend console.
 
-4.  **Creating the Spoken Response:**
-    *   The backend waits for the full text response from Gemini and then sends it to **Murf AI** to convert it into natural-sounding speech.
-    *   Murf AI returns a URL for the generated audio file.
-
-5.  **Displaying the Final Answer:**
-    *   The backend sends a final JSON response to the browser, containing both the LLM's text response and the URL for the spoken audio.
-    *   The browser then displays the text in the chat window and plays the audio, completing the conversation loop.
+4.  **Displaying the Final Answer:**
+    *   While the audio is being generated, the backend accumulates the full text from the LLM stream.
+    *   Once the stream is complete, the backend sends a final JSON response to the browser containing only the LLM's full text response.
+    *   The browser then displays this text in the chat window, completing the conversation loop.
 
 ## Key Changes (July 2024)
 
