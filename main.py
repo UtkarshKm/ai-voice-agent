@@ -13,6 +13,7 @@ import asyncio
 import logging
 import websockets
 import json
+import base64
 from typing import AsyncGenerator
 from contextlib import asynccontextmanager
 from transcriber import AssemblyAIStreamingTranscriber
@@ -105,8 +106,8 @@ async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECOND
         # Re-raise as HTTPException
         raise HTTPException(status_code=500, detail="LLM service failed")
 
-async def stream_llm_to_murf(text_stream):
-    """Streams text to Murf TTS WebSocket and prints base64 audio to console."""
+async def stream_llm_to_murf(text_stream, websocket: WebSocket):
+    """Streams text to Murf TTS WebSocket and streams audio back to the client."""
     WS_URL = "wss://api.murf.ai/v1/speech/stream-input"
     API_KEY = os.getenv("MURF_API_KEY")
     CONTEXT_ID = "my_static_context_id_for_streaming"  # Using a static context ID
@@ -118,7 +119,6 @@ async def stream_llm_to_murf(text_stream):
     uri = f"{WS_URL}?api-key={API_KEY}&sample_rate=44100&channel_type=MONO&format=WAV"
     logger.info("Connecting to Murf WebSocket...")
     full_text = ""
-    audio_chunks = []
 
     try:
         async with websockets.connect(uri) as ws:
@@ -134,16 +134,17 @@ async def stream_llm_to_murf(text_stream):
             await ws.send(json.dumps(voice_config_msg))
             logger.info("Sent voice config to Murf.")
 
-            # 2. Create a task to receive audio data
-            async def receiver(websocket):
+            # 2. Create a task to receive audio data from Murf and stream to client
+            async def receiver(murf_ws, client_ws):
                 while True:
                     try:
-                        response = await websocket.recv()
+                        response = await murf_ws.recv()
                         data = json.loads(response)
                         if "audio" in data and data["audio"]:
-                            # As requested, print the base64 encoded audio to the console
-                            # print(f"Received audio chunk (base64): {data['audio']}")
-                            print(f"Received audio chunk (base64)")
+                            await client_ws.send_text(json.dumps({
+                                "type": "audio",
+                                "data": data["audio"]
+                            }))
                         if data.get("final", False):
                             logger.info("Received final audio packet from Murf.")
                             break
@@ -154,7 +155,7 @@ async def stream_llm_to_murf(text_stream):
                         logger.error(f"Error receiving from Murf: {e}")
                         break
 
-            receiver_task = asyncio.create_task(receiver(ws))
+            receiver_task = asyncio.create_task(receiver(ws, websocket))
 
             # 3. Send text chunks from the LLM stream
             async for chunk in text_stream:
@@ -177,11 +178,6 @@ async def stream_llm_to_murf(text_stream):
 
             # 5. Wait for the receiver to finish processing all audio
             await receiver_task
-
-            # Now, join and print the complete base64 audio string
-            if audio_chunks:
-                complete_audio = "".join(audio_chunks)
-                print(f"Final Base64 Audio String: {complete_audio}")
 
             logger.info("Murf streaming finished.")
 
@@ -255,102 +251,106 @@ async def get_home():
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Homepage not found")
 
-@app.post("/agent/chat/{session_id}")
-async def agent_chat(session_id: str, request: ChatRequest):
-    """Handles conversational chat with an agent, maintaining history."""
-    try:
-        logger.info(f"Processing chat for session: {session_id}")
-        
-        # Validate session_id
-        if not session_id or len(session_id) < 10:
-            raise HTTPException(status_code=400, detail="Invalid session ID")
-        
-        user_text = request.transcript
-        logger.info(f"Received transcript: '{user_text[:50]}{'...' if len(user_text) > 50 else ''}'")
-        
-        if not user_text.strip():
-            return {
-                "audio_url": None,
-                "user_transcript": "",
-                "llm_response_text": "I didn't hear anything clear. Please speak louder and try again.",
-                "error": "no_speech_detected"
-            }
-
-        # Retrieve or create chat history
-        session_data = chat_histories.get(session_id, {
-            "history": [], 
-            "last_accessed": datetime.now()
-        })
-        history = session_data["history"]
-
-        # Add user's message to history
-        history.append({"role": "user", "parts": [user_text]})
-        history = manage_conversation_history(history)
-
-        # Generate LLM response and stream to TTS
-        llm_text = ""
-        try:
-            logger.info("Starting LLM and TTS streaming pipeline...")
-            llm_stream = generate_llm_response(history)
-            llm_text = await stream_llm_to_murf(llm_stream)
-
-            if llm_text:
-                logger.info(f"Full LLM response received: '{llm_text[:50]}{'...' if len(llm_text) > 50 else ''}'")
-                history.append({"role": "model", "parts": [llm_text]})
-            else:
-                logger.warning("LLM response was empty after streaming.")
-                # Handle case where LLM or Murf fails and returns empty
-                llm_text = "I tried to respond, but encountered an issue. Please try again."
-                history.append({"role": "model", "parts": [llm_text]})
-
-        except HTTPException:
-            # Re-raise HTTP exceptions from downstream services (LLM, etc.)
-            raise
-        except Exception as e:
-            logger.error(f"Error in streaming pipeline: {e}")
-            llm_text = f"I heard: '{user_text}'. An unexpected error occurred."
-            # Pop the user message as the model failed to produce a valid response
-            history.pop()
-
-        # Update session data
-        chat_histories[session_id] = {
-            "history": history, 
-            "last_accessed": datetime.now()
-        }
-
-        # The audio has been streamed to the console.
-        # Return the final text response to the client.
-        return {
-            "audio_url": None, # No longer sending an audio URL
-            "user_transcript": user_text, 
-            "llm_response_text": llm_text,
-            "usage": {
-                "estimated_cost": round(credit_usage["estimated_cost"], 4),
-                "total_seconds": credit_usage["total_seconds_processed"]
-            }
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in agent chat: {e}")
-        raise HTTPException(status_code=500, detail=f"Agent chat failed: {str(e)}")
-    
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Client connected to WebSocket")
-    
-    transcriber = AssemblyAIStreamingTranscriber(websocket=websocket, sample_rate=16000)
+
+    session_id = None
+    transcriber = None
 
     try:
         while True:
-            data = await websocket.receive_bytes()
-            transcriber.stream_audio(data)
+            message_str = await websocket.receive_text()
+            message = json.loads(message_str)
+
+            if message["type"] == "config":
+                session_id = message.get("session_id")
+                if not session_id:
+                    logger.error("No session_id provided in config")
+                    await websocket.close(code=1008, reason="Session ID is required")
+                    return
+
+                logger.info(f"Configuring WebSocket for session: {session_id}")
+
+                # Initialize transcriber for this session
+                transcriber = AssemblyAIStreamingTranscriber(
+                    websocket=websocket,
+                    sample_rate=message.get("sample_rate", 16000)
+                )
+
+            elif message["type"] == "audio":
+                if transcriber:
+                    # Audio data is expected to be base64 encoded by the client
+                    audio_bytes = base64.b64decode(message["data"])
+                    transcriber.stream_audio(audio_bytes)
+                else:
+                    logger.warning("Audio received before transcriber was initialized.")
+
+            elif message["type"] == "transcript":
+                user_text = message["data"]
+                logger.info(f"Received final transcript for session {session_id}: '{user_text}'")
+
+                if not user_text.strip():
+                    await websocket.send_text(json.dumps({
+                        "type": "llm_response",
+                        "text": "I didn't hear anything clear. Please speak louder and try again."
+                    }))
+                    continue
+
+                # Retrieve or create chat history
+                session_data = chat_histories.get(session_id, {
+                    "history": [],
+                    "last_accessed": datetime.now()
+                })
+                history = session_data["history"]
+                history.append({"role": "user", "parts": [user_text]})
+                history = manage_conversation_history(history)
+
+                # Generate LLM response and stream to TTS
+                llm_text = ""
+                try:
+                    logger.info(f"Starting LLM/TTS pipeline for session {session_id}...")
+                    llm_stream = generate_llm_response(history)
+                    llm_text = await stream_llm_to_murf(llm_stream, websocket)
+
+                    if llm_text:
+                        logger.info(f"Full LLM response for {session_id}: '{llm_text[:50]}...'")
+                        history.append({"role": "model", "parts": [llm_text]})
+                        # Send the final text response to the client
+                        await websocket.send_text(json.dumps({
+                            "type": "llm_response",
+                            "text": llm_text
+                        }))
+                    else:
+                        logger.warning(f"LLM response was empty for session {session_id}.")
+                        llm_text = "I tried to respond, but encountered an issue. Please try again."
+                        history.append({"role": "model", "parts": [llm_text]})
+                        await websocket.send_text(json.dumps({
+                            "type": "llm_response",
+                            "text": llm_text
+                        }))
+
+                except Exception as e:
+                    logger.error(f"Error in streaming pipeline for {session_id}: {e}")
+                    llm_text = f"I heard: '{user_text}'. An unexpected error occurred."
+                    history.pop() # Pop user message as model failed
+                    await websocket.send_text(json.dumps({
+                        "type": "llm_response",
+                        "text": llm_text
+                    }))
+
+                # Update session data
+                chat_histories[session_id] = {
+                    "history": history,
+                    "last_accessed": datetime.now()
+                }
+
     except WebSocketDisconnect:
-        logger.info("Client disconnected.")
+        logger.info(f"Client disconnected from session {session_id}.")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error for session {session_id}: {e}")
     finally:
-        transcriber.close()
-        logger.info("Transcription resources closed.")
+        if transcriber:
+            transcriber.close()
+        logger.info(f"Resources closed for session {session_id}.")
