@@ -242,7 +242,7 @@ function showNotification(message, type = 'info', duration = 5000) {
             };
 
             mediaStreamSource.connect(scriptProcessor);
-            scriptProcessor.connect(audioContext.destination);
+            scriptProcessor.connect(mediaRecorderAudioContext.destination);
 
         } catch (err) {
             console.error("Microphone error", err);
