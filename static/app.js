@@ -102,8 +102,11 @@ function showNotification(message, type = 'info', duration = 5000) {
 
     let websocket = null;
     let audioContext = null;
+    let mediaStreamSource = null;
+    let scriptProcessor = null;
     let state = 'idle';
     let fullTranscript = '';
+    let audioChunks = []; // To hold incoming audio chunks
 
     const setState = (newState) => {
         state = newState;
@@ -129,47 +132,104 @@ function showNotification(message, type = 'info', duration = 5000) {
                 recordBtn.disabled = false;
                 break;
             case 'processing':
-                statusEl.textContent = "Processing...";
+                statusEl.textContent = "AI is thinking...";
                 recordBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
                 recordBtn.disabled = true;
                 break;
         }
     };
 
+    // Helper to convert buffer to base64
+    function bufferToBase64(buffer) {
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return window.btoa(binary);
+    }
+
     const startRecording = async () => {
         if (state !== 'idle') return;
         setState('recording');
         fullTranscript = ''; // Reset transcript
+        audioChunks = []; // Reset audio chunks
 
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            const source = audioContext.createMediaStreamSource(stream);
-            const processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-            processor.onaudioprocess = (event) => {
-                const pcmData = new Int16Array(event.inputBuffer.getChannelData(0).map(f => f * 32767));
-                if (websocket && websocket.readyState === WebSocket.OPEN) {
-                    websocket.send(pcmData.buffer);
-                }
+            websocket = new WebSocket(`ws://${window.location.host}/ws`);
+            websocket.onopen = () => {
+                console.log("WebSocket connected. Sending config.");
+                // Send session configuration
+                websocket.send(JSON.stringify({
+                    type: "config",
+                    session_id: window.chatSessionId,
+                    sample_rate: 16000
+                }));
             };
 
-            source.connect(processor);
-            processor.connect(audioContext.destination);
+            websocket.onerror = (e) => {
+                console.error("WebSocket error:", e);
+                showNotification("Connection error. Please refresh.", "error");
+                setState('idle');
+            };
 
-            websocket = new WebSocket(`ws://${window.location.host}/ws`);
-            websocket.onopen = () => console.log("WebSocket connected");
-            websocket.onerror = (e) => console.error("WebSocket error", e);
             websocket.onmessage = (event) => {
                 const message = JSON.parse(event.data);
-                if (message.type === 'transcript' && message.data) {
-                    displayPartialTranscript(message.data);
-                    fullTranscript += message.data + ' ';
+                switch (message.type) {
+                    case 'transcript':
+                        if (message.data) {
+                            displayPartialTranscript(message.data);
+                            fullTranscript += message.data + ' ';
+                        }
+                        break;
+                    case 'llm_response':
+                        displayLlmResponse(message.text);
+                        setState('idle'); // Ready for next input
+                        break;
+                    case 'audio':
+                        console.log("Received audio chunk (base64)");
+                        audioChunks.push(message.data);
+                        break;
+                    case 'error':
+                        showNotification(message.detail, 'error');
+                        setState('idle');
+                        break;
                 }
             };
+
+            websocket.onclose = () => {
+                console.log("WebSocket disconnected.");
+                setState('idle'); // Reset state when connection closes
+            };
+
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            mediaStreamSource = audioContext.createMediaStreamSource(stream);
+            scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+            scriptProcessor.onaudioprocess = (event) => {
+                const pcmData = event.inputBuffer.getChannelData(0);
+                const int16Pcm = new Int16Array(pcmData.length);
+                for (let i = 0; i < pcmData.length; i++) {
+                    int16Pcm[i] = Math.max(-1, Math.min(1, pcmData[i])) * 32767;
+                }
+
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    // Send audio data as base64 string
+                    websocket.send(JSON.stringify({
+                        type: "audio",
+                        data: bufferToBase64(int16Pcm.buffer)
+                    }));
+                }
+            };
+
+            mediaStreamSource.connect(scriptProcessor);
+            scriptProcessor.connect(audioContext.destination);
+
         } catch (err) {
             console.error("Microphone error", err);
-            showNotification("Microphone access denied", "error");
+            showNotification("Microphone access denied. Please allow microphone access.", "error");
             setState('idle');
         }
     };
@@ -178,47 +238,30 @@ function showNotification(message, type = 'info', duration = 5000) {
         if (state !== 'recording') return;
         setState('processing');
 
-        if (websocket) {
-            websocket.close();
-            websocket = null;
-        }
+        // Stop audio processing
         if (audioContext) {
-            audioContext.close();
-            audioContext = null;
+            audioContext.close().then(() => {
+                audioContext = null;
+                mediaStreamSource = null;
+                scriptProcessor = null;
+            });
         }
 
         if (fullTranscript.trim()) {
             displayFinalTranscript(fullTranscript);
-            sendTranscriptToAgent(fullTranscript);
+            // Send the final transcript to the server over WebSocket
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                websocket.send(JSON.stringify({
+                    type: "transcript",
+                    data: fullTranscript.trim()
+                }));
+            }
         } else {
             showNotification("No speech detected.", "warning");
             setState('idle');
-        }
-    };
-
-    const sendTranscriptToAgent = async (transcript) => {
-        try {
-            const response = await fetchWithRetry(`/agent/chat/${window.chatSessionId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ transcript: transcript.trim() }),
-            });
-
-            const data = await response.json();
-
-            if (data.error) {
-                showNotification(`Error: ${data.llm_response_text}`, 'error');
-            } else {
-                displayLlmResponse(data.llm_response_text);
-                if (data.audio_url) {
-                    playAudio(data.audio_url);
-                }
+            if (websocket) {
+                websocket.close(); // Close the connection if no speech was detected
             }
-        } catch (error) {
-            console.error("Error sending transcript:", error);
-            showNotification("Failed to get response from agent.", "error");
-        } finally {
-            setState('idle');
         }
     };
 
@@ -251,14 +294,6 @@ function showNotification(message, type = 'info', duration = 5000) {
         el.innerHTML = `<strong class="font-semibold block text-green-600 dark:text-green-400">AI Agent</strong>${text}`;
         conversationEl.appendChild(el);
         conversationEl.scrollTop = conversationEl.scrollHeight;
-    };
-
-    const playAudio = (url) => {
-        const audio = new Audio(url);
-        audio.play().catch(e => {
-            console.error("Audio playback failed:", e);
-            showNotification("Could not play audio response.", "warning");
-        });
     };
 
     recordBtn.addEventListener('click', () => {
