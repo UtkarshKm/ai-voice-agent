@@ -107,7 +107,7 @@ function showNotification(message, type = 'info', duration = 5000) {
     // --- Audio Recording State ---
     let mediaRecorderAudioContext = null;
     let mediaStreamSource = null;
-    let scriptProcessor = null;
+    let audioWorkletNode = null;
 
     // --- Audio Playback State ---
     const SAMPLE_RATE = 44100;
@@ -222,18 +222,20 @@ function showNotification(message, type = 'info', duration = 5000) {
 
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaRecorderAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            mediaStreamSource = mediaRecorderAudioContext.createMediaStreamSource(stream);
-            scriptProcessor = mediaRecorderAudioContext.createScriptProcessor(4096, 1, 1);
 
-            scriptProcessor.onaudioprocess = (event) => {
-                const pcmData = event.inputBuffer.getChannelData(0);
+            await mediaRecorderAudioContext.audioWorklet.addModule('/static/audio-processor.js');
+
+            mediaStreamSource = mediaRecorderAudioContext.createMediaStreamSource(stream);
+            audioWorkletNode = new AudioWorkletNode(mediaRecorderAudioContext, 'audio-data-processor');
+
+            audioWorkletNode.port.onmessage = (event) => {
+                const pcmData = new Float32Array(event.data);
                 const int16Pcm = new Int16Array(pcmData.length);
                 for (let i = 0; i < pcmData.length; i++) {
                     int16Pcm[i] = Math.max(-1, Math.min(1, pcmData[i])) * 32767;
                 }
 
                 if (websocket && websocket.readyState === WebSocket.OPEN) {
-                    // Send audio data as base64 string
                     websocket.send(JSON.stringify({
                         type: "audio",
                         data: bufferToBase64(int16Pcm.buffer)
@@ -241,12 +243,9 @@ function showNotification(message, type = 'info', duration = 5000) {
                 }
             };
 
-            const gainNode = mediaRecorderAudioContext.createGain();
-            gainNode.gain.value = 0;
-
-            mediaStreamSource.connect(scriptProcessor);
-            scriptProcessor.connect(gainNode);
-            gainNode.connect(mediaRecorderAudioContext.destination);
+            mediaStreamSource.connect(audioWorkletNode);
+            // The AudioWorkletNode does not need to be connected to the destination
+            // to process audio. It runs automatically.
 
         } catch (err) {
             console.error("Microphone error", err);
@@ -264,7 +263,7 @@ function showNotification(message, type = 'info', duration = 5000) {
             mediaRecorderAudioContext.close().then(() => {
                 mediaRecorderAudioContext = null;
                 mediaStreamSource = null;
-                scriptProcessor = null;
+                audioWorkletNode = null;
             });
         }
 
