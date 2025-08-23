@@ -101,12 +101,22 @@ function showNotification(message, type = 'info', duration = 5000) {
     }
 
     let websocket = null;
-    let audioContext = null;
-    let mediaStreamSource = null;
-    let scriptProcessor = null;
     let state = 'idle';
     let fullTranscript = '';
-    let audioChunks = []; // To hold incoming audio chunks
+
+    // --- Audio Recording State ---
+    let mediaRecorderAudioContext = null;
+    let mediaStreamSource = null;
+    let audioWorkletNode = null;
+    let audioBuffer = [];
+
+    // --- Audio Playback State ---
+    const SAMPLE_RATE = 44100;
+    let audioContext = null; // This will be for playback
+    let audioQueue = [];
+    let isPlaying = false;
+    let playheadTime = 0;
+    let isWavHeaderReceived = false;
 
     const setState = (newState) => {
         state = newState;
@@ -153,8 +163,18 @@ function showNotification(message, type = 'info', duration = 5000) {
     const startRecording = async () => {
         if (state !== 'idle') return;
         setState('recording');
-        fullTranscript = ''; // Reset transcript
-        audioChunks = []; // Reset audio chunks
+
+        // Reset states
+        fullTranscript = '';
+        audioBuffer = [];
+        audioQueue = [];
+        isPlaying = false;
+        playheadTime = 0;
+        isWavHeaderReceived = false;
+        if (audioContext) {
+            await audioContext.close();
+            audioContext = null;
+        }
 
         try {
             websocket = new WebSocket(`ws://${window.location.host}/ws`);
@@ -188,8 +208,7 @@ function showNotification(message, type = 'info', duration = 5000) {
                         setState('idle'); // Ready for next input
                         break;
                     case 'audio':
-                        console.log("Received audio chunk (base64)");
-                        audioChunks.push(message.data);
+                        playAudioChunk(message.data);
                         break;
                     case 'error':
                         showNotification(message.detail, 'error');
@@ -204,28 +223,26 @@ function showNotification(message, type = 'info', duration = 5000) {
             };
 
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            mediaStreamSource = audioContext.createMediaStreamSource(stream);
-            scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+            mediaRecorderAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
-            scriptProcessor.onaudioprocess = (event) => {
-                const pcmData = event.inputBuffer.getChannelData(0);
-                const int16Pcm = new Int16Array(pcmData.length);
-                for (let i = 0; i < pcmData.length; i++) {
-                    int16Pcm[i] = Math.max(-1, Math.min(1, pcmData[i])) * 32767;
-                }
+            await mediaRecorderAudioContext.audioWorklet.addModule('/static/audio-processor.js');
 
-                if (websocket && websocket.readyState === WebSocket.OPEN) {
-                    // Send audio data as base64 string
-                    websocket.send(JSON.stringify({
-                        type: "audio",
-                        data: bufferToBase64(int16Pcm.buffer)
-                    }));
+            mediaStreamSource = mediaRecorderAudioContext.createMediaStreamSource(stream);
+            audioWorkletNode = new AudioWorkletNode(mediaRecorderAudioContext, 'audio-data-processor');
+
+            audioWorkletNode.port.onmessage = (event) => {
+                const pcmData = new Float32Array(event.data);
+                audioBuffer.push(pcmData);
+
+                // Send buffered audio every 10 chunks (80ms of audio)
+                if (audioBuffer.length >= 10) {
+                    sendBufferedAudio();
                 }
             };
 
-            mediaStreamSource.connect(scriptProcessor);
-            scriptProcessor.connect(audioContext.destination);
+            mediaStreamSource.connect(audioWorkletNode);
+            // The AudioWorkletNode does not need to be connected to the destination
+            // to process audio. It runs automatically.
 
         } catch (err) {
             console.error("Microphone error", err);
@@ -234,16 +251,44 @@ function showNotification(message, type = 'info', duration = 5000) {
         }
     };
 
+    const sendBufferedAudio = () => {
+        if (audioBuffer.length === 0) return;
+
+        const totalLength = audioBuffer.reduce((acc, val) => acc + val.length, 0);
+        const concatenated = new Float32Array(totalLength);
+        let offset = 0;
+        for (const buffer of audioBuffer) {
+            concatenated.set(buffer, offset);
+            offset += buffer.length;
+        }
+
+        const int16Pcm = new Int16Array(concatenated.length);
+        for (let i = 0; i < concatenated.length; i++) {
+            int16Pcm[i] = Math.max(-1, Math.min(1, concatenated[i])) * 32767;
+        }
+
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+            websocket.send(JSON.stringify({
+                type: "audio",
+                data: bufferToBase64(int16Pcm.buffer)
+            }));
+        }
+
+        audioBuffer = []; // Clear the buffer after sending
+    };
+
     const stopRecording = () => {
         if (state !== 'recording') return;
         setState('processing');
 
+        sendBufferedAudio(); // Send any remaining audio in the buffer
+
         // Stop audio processing
-        if (audioContext) {
-            audioContext.close().then(() => {
-                audioContext = null;
+        if (mediaRecorderAudioContext) {
+            mediaRecorderAudioContext.close().then(() => {
+                mediaRecorderAudioContext = null;
                 mediaStreamSource = null;
-                scriptProcessor = null;
+                audioWorkletNode = null;
             });
         }
 
@@ -295,6 +340,86 @@ function showNotification(message, type = 'info', duration = 5000) {
         conversationEl.appendChild(el);
         conversationEl.scrollTop = conversationEl.scrollHeight;
     };
+
+    // --- Audio Playback Implementation ---
+
+    function base64ToPCMFloat32(base64) {
+        try {
+            const binary = atob(base64);
+            const offset = !isWavHeaderReceived ? 44 : 0;
+            if (!isWavHeaderReceived) {
+                isWavHeaderReceived = true;
+            }
+            if (binary.length <= offset) return new Float32Array(0);
+
+            const length = binary.length - offset;
+            const buffer = new ArrayBuffer(length);
+            const view = new DataView(buffer);
+
+            for (let i = 0; i < length; i++) {
+                view.setUint8(i, binary.charCodeAt(i + offset));
+            }
+
+            const pcm16 = new Int16Array(buffer);
+            const float32 = new Float32Array(pcm16.length);
+
+            for (let i = 0; i < pcm16.length; i++) {
+                float32[i] = pcm16[i] / 32768.0;
+            }
+
+            return float32;
+        } catch(e) {
+            console.error("Error decoding base64 audio:", e);
+            return new Float32Array(0);
+        }
+    }
+
+    function processAndPlay() {
+        if (audioQueue.length === 0 || !isPlaying) {
+            isPlaying = false;
+            return;
+        }
+
+        const float32Array = audioQueue.shift();
+        if (!float32Array || float32Array.length === 0) {
+            processAndPlay(); // Skip empty chunks
+            return;
+        }
+
+        const buffer = audioContext.createBuffer(1, float32Array.length, SAMPLE_RATE);
+        buffer.copyToChannel(float32Array, 0);
+
+        const source = audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.destination);
+
+        const now = audioContext.currentTime;
+        const startTime = Math.max(now, playheadTime);
+        source.start(startTime);
+
+        playheadTime = startTime + buffer.duration;
+        source.onended = processAndPlay;
+    }
+
+    function playAudioChunk(base64Audio) {
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+            playheadTime = audioContext.currentTime;
+        }
+
+        const pcmData = base64ToPCMFloat32(base64Audio);
+        if (pcmData.length > 0) {
+            audioQueue.push(pcmData);
+            if (!isPlaying) {
+                isPlaying = true;
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume().then(processAndPlay);
+                } else {
+                    processAndPlay();
+                }
+            }
+        }
+    }
 
     recordBtn.addEventListener('click', () => {
         if (state === 'idle') startRecording();
