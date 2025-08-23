@@ -108,6 +108,7 @@ function showNotification(message, type = 'info', duration = 5000) {
     let mediaRecorderAudioContext = null;
     let mediaStreamSource = null;
     let audioWorkletNode = null;
+    let audioBuffer = [];
 
     // --- Audio Playback State ---
     const SAMPLE_RATE = 44100;
@@ -165,6 +166,7 @@ function showNotification(message, type = 'info', duration = 5000) {
 
         // Reset states
         fullTranscript = '';
+        audioBuffer = [];
         audioQueue = [];
         isPlaying = false;
         playheadTime = 0;
@@ -230,16 +232,11 @@ function showNotification(message, type = 'info', duration = 5000) {
 
             audioWorkletNode.port.onmessage = (event) => {
                 const pcmData = new Float32Array(event.data);
-                const int16Pcm = new Int16Array(pcmData.length);
-                for (let i = 0; i < pcmData.length; i++) {
-                    int16Pcm[i] = Math.max(-1, Math.min(1, pcmData[i])) * 32767;
-                }
+                audioBuffer.push(pcmData);
 
-                if (websocket && websocket.readyState === WebSocket.OPEN) {
-                    websocket.send(JSON.stringify({
-                        type: "audio",
-                        data: bufferToBase64(int16Pcm.buffer)
-                    }));
+                // Send buffered audio every 10 chunks (80ms of audio)
+                if (audioBuffer.length >= 10) {
+                    sendBufferedAudio();
                 }
             };
 
@@ -254,9 +251,37 @@ function showNotification(message, type = 'info', duration = 5000) {
         }
     };
 
+    const sendBufferedAudio = () => {
+        if (audioBuffer.length === 0) return;
+
+        const totalLength = audioBuffer.reduce((acc, val) => acc + val.length, 0);
+        const concatenated = new Float32Array(totalLength);
+        let offset = 0;
+        for (const buffer of audioBuffer) {
+            concatenated.set(buffer, offset);
+            offset += buffer.length;
+        }
+
+        const int16Pcm = new Int16Array(concatenated.length);
+        for (let i = 0; i < concatenated.length; i++) {
+            int16Pcm[i] = Math.max(-1, Math.min(1, concatenated[i])) * 32767;
+        }
+
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+            websocket.send(JSON.stringify({
+                type: "audio",
+                data: bufferToBase64(int16Pcm.buffer)
+            }));
+        }
+
+        audioBuffer = []; // Clear the buffer after sending
+    };
+
     const stopRecording = () => {
         if (state !== 'recording') return;
         setState('processing');
+
+        sendBufferedAudio(); // Send any remaining audio in the buffer
 
         // Stop audio processing
         if (mediaRecorderAudioContext) {
