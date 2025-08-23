@@ -242,7 +242,9 @@ function showNotification(message, type = 'info', duration = 5000) {
             };
 
             mediaStreamSource.connect(scriptProcessor);
-            scriptProcessor.connect(mediaRecorderAudioContext.destination);
+            // The script processor is a terminal node here for capturing audio,
+            // it doesn't need to be connected to the destination.
+            // scriptProcessor.connect(mediaRecorderAudioContext.destination);
 
         } catch (err) {
             console.error("Microphone error", err);
