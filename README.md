@@ -65,6 +65,14 @@ This application was recently updated to fix a critical bug in the application f
 
 *   **LLM Response Streaming:** The backend now streams the response from the Google Gemini API. As the response is being generated, the text chunks are printed to the server's console logs in real-time. This is useful for debugging and observing the AI's response generation.
 
+## Technical Enhancements (August 2025)
+
+The audio processing pipeline has been significantly modernized and hardened.
+
+*   **Upgraded to `AudioWorklet`:** The client-side audio capture has been refactored from the deprecated `ScriptProcessorNode` to the modern **`AudioWorklet` API**. This moves audio processing off the main UI thread, resulting in a more performant and stable experience with less risk of UI "jank" or audio glitches.
+
+*   **Client-Side Audio Buffering:** To ensure compatibility with the transcription service, a client-side buffering system was implemented. The `AudioWorklet` produces very small audio chunks (128 samples / 8ms). The new system collects these small chunks into a larger buffer (e.g., 80ms) before sending them to the backend, satisfying the minimum duration requirements of the AssemblyAI service.
+
 ## 🚀 Getting Started
 
 Follow these instructions to set up and run the project locally.
