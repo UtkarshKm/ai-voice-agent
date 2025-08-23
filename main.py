@@ -138,7 +138,8 @@ async def stream_llm_to_murf(text_stream, websocket: WebSocket):
             async def receiver(murf_ws, client_ws):
                 while True:
                     try:
-                        response = await murf_ws.recv()
+                        # Add a timeout to the receive operation to prevent indefinite blocking
+                        response = await asyncio.wait_for(murf_ws.recv(), timeout=30.0)
                         data = json.loads(response)
                         if "audio" in data and data["audio"]:
                             await client_ws.send_text(json.dumps({
@@ -148,6 +149,9 @@ async def stream_llm_to_murf(text_stream, websocket: WebSocket):
                         if data.get("final", False):
                             logger.info("Received final audio packet from Murf.")
                             break
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout waiting for audio from Murf. Assuming stream is complete.")
+                        break
                     except websockets.exceptions.ConnectionClosed:
                         logger.warning("Murf WebSocket connection closed by server.")
                         break
