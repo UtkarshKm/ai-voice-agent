@@ -170,7 +170,7 @@ function showNotification(message, type = 'info', duration = 5000) {
         playheadTime = 0;
         isWavHeaderReceived = false;
         if (audioContext) {
-            audioContext.close();
+            await audioContext.close();
             audioContext = null;
         }
 
