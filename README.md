@@ -16,6 +16,7 @@ This project is a conversational AI voice agent that listens to your questions a
 *   **Session Management:** The conversation history is maintained throughout a session.
 *   **Cost Optimization:** Uses efficient AI models and techniques to minimize operational costs.
 *   **Health & Usage Monitoring:** Endpoints to check the application's status and API credit usage.
+*   **Real-time Audio Playback:** The AI's voice is streamed back to you in real-time, creating a more natural and responsive conversation.
 *   **Responsive Design:** Works on both desktop and mobile browsers.
 
 ## 🛠️ Technologies Used
@@ -25,38 +26,34 @@ This project is a conversational AI voice agent that listens to your questions a
 *   **[FastAPI](https://fastapi.tiangolo.com/):** A modern, fast (high-performance) web framework for building APIs with Python.
 *   **[Uvicorn](https://www.uvicorn.org/):** A lightning-fast ASGI server, used to run the FastAPI application.
 *   **[AssemblyAI](https://www.assemblyai.com/):** Used for highly accurate speech-to-text transcription.
-*   **[Google Gemini](https://deepmind.google/technologies/gemini/):** The generative AI model (`gemini-2.5-flash`) used for generating intelligent responses.
-*   **[Murf AI](https://murf.ai/):** Used for converting the AI's text response back into natural-sounding speech.
+*   **[Google Gemini](https://deepmind.google/technologies/gemini/):** The generative AI model (`gemini-1.5-flash`) used for generating intelligent responses.
+*   **[Murf AI](https://murf.ai/):** Used for converting the AI's text response back into natural-sounding speech via WebSocket streaming.
 
 ### Frontend
 
 *   **HTML5, CSS3, JavaScript:** The standard technologies for building the web interface.
 *   **[Tailwind CSS](https://tailwindcss.com/):** A utility-first CSS framework for rapid UI development.
 *   **MediaRecorder API:** A browser API used to record audio from the user's microphone.
+*   **Web Audio API:** Used to play the incoming audio stream from the AI in real-time, providing a seamless playback experience.
 
 ## How it Works
 
 The application uses a combination of real-time speech-to-text, a generative AI model, and a text-to-speech service to create a seamless conversational experience. Here is the step-by-step flow:
 
 1.  **Real-time Transcription:**
-    *   When you click the "Record" button, your browser captures your microphone audio and sends it to the backend over a WebSocket connection.
-    *   The backend forwards the audio stream to **AssemblyAI**, which performs real-time transcription.
-    *   The transcribed text is sent back to the browser in chunks and displayed on the screen for immediate feedback.
+    *   When you click the "Record" button, your browser captures microphone audio using the **MediaRecorder API**.
+    *   This audio is sent to the backend over a WebSocket connection.
+    *   The backend forwards the audio stream to **AssemblyAI**, which performs real-time transcription and sends the text back to the browser for immediate display.
 
-2.  **Sending the Final Transcript:**
-    *   While the real-time transcription is happening, the browser accumulates the full transcript.
-    *   When you click the "Stop" button, the WebSocket connection is closed, and the final, complete transcript is sent to the backend's main conversational agent endpoint (`/agent/chat/{session_id}`).
-
-3.  **Generating an AI Response and Streaming Audio:**
-    *   The backend receives the transcript and sends it to the **Google Gemini** model to generate an intelligent response.
-    *   Instead of waiting for the full response, the backend receives the LLM's response as a **stream of text chunks**.
+2.  **Generating and Streaming the AI's Response:**
+    *   When you stop recording, the final transcript is sent to the backend.
+    *   The backend sends the transcript to the **Google Gemini** model, which generates an intelligent response as a stream of text chunks.
     *   As each text chunk is received from Gemini, it is immediately forwarded to **Murf AI's WebSocket API** for real-time text-to-speech conversion.
-    *   Murf streams back the audio as base64-encoded chunks, which are then printed to the backend console.
 
-4.  **Displaying the Final Answer:**
-    *   While the audio is being generated, the backend accumulates the full text from the LLM stream.
-    *   Once the stream is complete, the backend sends a final JSON response to the browser containing only the LLM's full text response.
-    *   The browser then displays this text in the chat window, completing the conversation loop.
+3.  **Real-time Audio Playback:**
+    *   Murf AI streams the synthesized voice back to the backend, which immediately forwards the audio chunks to the browser over the existing WebSocket.
+    *   The browser uses the **Web Audio API** to play these audio chunks as they arrive. This ensures a low-latency, seamless playback of the AI's voice, creating a natural conversational flow. The client-side implementation for this is inspired by the [official Murf AI cookbook example](https://github.com/murf-ai/murf-cookbook/blob/main/examples/text-to-speech/js/websocket/basic/index.js).
+    *   Simultaneously, the full text of the AI's response is sent to the browser and displayed in the chat window.
 
 ## Key Changes (July 2024)
 
