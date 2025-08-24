@@ -268,47 +268,22 @@ async def websocket_endpoint(websocket: WebSocket):
             message_str = await websocket.receive_text()
             message = json.loads(message_str)
 
-            if message["type"] == "config":
-                session_id = message.get("session_id")
-                if not session_id:
-                    logger.error("No session_id provided in config")
-                    await websocket.close(code=1008, reason="Session ID is required")
-                    return
+            # --- Transcript Processing Callback ---
+            async def process_transcript(transcript_text: str):
+                logger.info(f"Processing final transcript for session {session_id}: '{transcript_text}'")
 
-                logger.info(f"Configuring WebSocket for session: {session_id}")
-
-                # Initialize transcriber for this session
-                transcriber = AssemblyAIStreamingTranscriber(
-                    websocket=websocket,
-                    sample_rate=message.get("sample_rate", 16000)
-                )
-
-            elif message["type"] == "audio":
-                if transcriber:
-                    # Audio data is expected to be base64 encoded by the client
-                    audio_bytes = base64.b64decode(message["data"])
-                    transcriber.stream_audio(audio_bytes)
-                else:
-                    logger.warning("Audio received before transcriber was initialized.")
-
-            elif message["type"] == "transcript":
-                user_text = message["data"]
-                logger.info(f"Received final transcript for session {session_id}: '{user_text}'")
-
-                if not user_text.strip():
-                    await websocket.send_text(json.dumps({
-                        "type": "llm_response",
-                        "text": "I didn't hear anything clear. Please speak louder and try again."
-                    }))
-                    continue
+                # Send final transcript to client for display
+                await websocket.send_text(json.dumps({
+                    "type": "user_transcript",
+                    "data": transcript_text
+                }))
 
                 # Retrieve or create chat history
                 session_data = chat_histories.get(session_id, {
-                    "history": [],
-                    "last_accessed": datetime.now()
+                    "history": [], "last_accessed": datetime.now()
                 })
                 history = session_data["history"]
-                history.append({"role": "user", "parts": [user_text]})
+                history.append({"role": "user", "parts": [transcript_text]})
                 history = manage_conversation_history(history)
 
                 # Generate LLM response and stream to TTS
@@ -330,25 +305,48 @@ async def websocket_endpoint(websocket: WebSocket):
                         logger.warning(f"LLM response was empty for session {session_id}.")
                         llm_text = "I tried to respond, but encountered an issue. Please try again."
                         history.append({"role": "model", "parts": [llm_text]})
-                        await websocket.send_text(json.dumps({
-                            "type": "llm_response",
-                            "text": llm_text
-                        }))
+                        await websocket.send_text(json.dumps({"type": "llm_response", "text": llm_text}))
 
                 except Exception as e:
                     logger.error(f"Error in streaming pipeline for {session_id}: {e}")
-                    llm_text = f"I heard: '{user_text}'. An unexpected error occurred."
-                    history.pop() # Pop user message as model failed
-                    await websocket.send_text(json.dumps({
-                        "type": "llm_response",
-                        "text": llm_text
-                    }))
+                    llm_text = f"An unexpected error occurred while generating a response."
+                    history.pop()  # Pop user message as model failed
+                    await websocket.send_text(json.dumps({"type": "llm_response", "text": llm_text}))
 
                 # Update session data
                 chat_histories[session_id] = {
-                    "history": history,
-                    "last_accessed": datetime.now()
+                    "history": history, "last_accessed": datetime.now()
                 }
+
+            # --- WebSocket Message Handling ---
+            if message["type"] == "config":
+                session_id = message.get("session_id")
+                if not session_id:
+                    logger.error("No session_id provided in config")
+                    await websocket.close(code=1008, reason="Session ID is required")
+                    return
+
+                logger.info(f"Configuring WebSocket for session: {session_id}")
+
+                # Initialize transcriber with the callback
+                transcriber = AssemblyAIStreamingTranscriber(
+                    websocket=websocket,
+                    on_transcript_callback=process_transcript,
+                    sample_rate=message.get("sample_rate", 16000)
+                )
+
+            elif message["type"] == "audio":
+                if transcriber:
+                    audio_bytes = base64.b64decode(message["data"])
+                    transcriber.stream_audio(audio_bytes)
+                else:
+                    logger.warning("Audio received before transcriber was initialized.")
+
+            elif message["type"] == "stop_recording":
+                logger.info(f"Client signaled end of recording for session {session_id}.")
+                # This message can be used to signal the transcriber to finalize if needed,
+                # but AssemblyAI's turn-based formatting handles this automatically.
+                # We can add logic here if we need to force-end a transcript.
 
     except WebSocketDisconnect:
         logger.info(f"Client disconnected from session {session_id}.")

@@ -14,12 +14,19 @@ import os
 import json
 import asyncio
 from fastapi import WebSocket
+from typing import Callable, Coroutine
 
 aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
 
 class AssemblyAIStreamingTranscriber:
-    def __init__(self, websocket: WebSocket, sample_rate=16000):
+    def __init__(
+        self,
+        websocket: WebSocket,
+        on_transcript_callback: Callable[[str], Coroutine],
+        sample_rate=16000,
+    ):
         self.websocket = websocket
+        self.on_transcript_callback = on_transcript_callback
         self.loop = asyncio.get_event_loop()
         self.client = StreamingClient(
             StreamingClientOptions(
@@ -31,18 +38,35 @@ class AssemblyAIStreamingTranscriber:
         self.client.on(StreamingEvents.Termination, self.on_termination)
         self.client.on(StreamingEvents.Error, self.on_error)
 
-        self.client.connect(StreamingParameters(sample_rate=sample_rate, format_turns=True))
+        self.client.connect(
+            StreamingParameters(
+                sample_rate=sample_rate,
+                format_turns=True,
+                interim_results=True,
+            )
+        )
 
     def on_begin(self, _: StreamingClient, event: BeginEvent):
         print(f"Session started: {event.id}")
 
     def on_turn(self, _: StreamingClient, event: TurnEvent):
-        print(f"{event.transcript} (end_of_turn={event.end_of_turn})")
-        if event.end_of_turn and event.turn_is_formatted:
+        transcript = event.transcript
+        print(f'{"interim" if event.interim else "final"}: {transcript}')
+
+        # Send interim results to the client for real-time feedback
+        if event.interim:
             coro = self.websocket.send_text(
-                json.dumps({"type": "transcript", "data": event.transcript})
+                json.dumps({"type": "transcript", "data": transcript})
             )
             asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+        # If it's the end of a turn (a complete sentence), process it
+        if event.end_of_turn and event.turn_is_formatted and transcript:
+            # This is the final, confirmed transcript for the turn.
+            # We call the server-side callback to process it.
+            asyncio.run_coroutine_threadsafe(
+                self.on_transcript_callback(transcript), self.loop
+            )
 
     def on_termination(self, _: StreamingClient, event: TerminationEvent):
         print(f"Session terminated after {event.audio_duration_seconds} s")

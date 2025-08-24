@@ -102,7 +102,6 @@ function showNotification(message, type = 'info', duration = 5000) {
 
     let websocket = null;
     let state = 'idle';
-    let fullTranscript = '';
 
     // --- Audio Recording State ---
     let mediaRecorderAudioContext = null;
@@ -165,7 +164,6 @@ function showNotification(message, type = 'info', duration = 5000) {
         setState('recording');
 
         // Reset states
-        fullTranscript = '';
         audioBuffer = [];
         audioQueue = [];
         isPlaying = false;
@@ -197,17 +195,17 @@ function showNotification(message, type = 'info', duration = 5000) {
             websocket.onmessage = (event) => {
                 const message = JSON.parse(event.data);
                 switch (message.type) {
-                    case 'transcript':
-                        if (message.data) {
-                            displayPartialTranscript(message.data);
-                            fullTranscript += message.data + ' ';
-                        }
+                    case 'transcript': // Interim results
+                        displayInterimTranscript(message.data);
                         break;
-                    case 'llm_response':
+                    case 'user_transcript': // Final transcript from user
+                        displayFinalTranscript(message.data);
+                        break;
+                    case 'llm_response': // Final text from AI
                         displayLlmResponse(message.text);
                         setState('idle'); // Ready for next input
                         break;
-                    case 'audio':
+                    case 'audio': // Audio stream from AI
                         playAudioChunk(message.data);
                         break;
                     case 'error':
@@ -231,18 +229,17 @@ function showNotification(message, type = 'info', duration = 5000) {
             audioWorkletNode = new AudioWorkletNode(mediaRecorderAudioContext, 'audio-data-processor');
 
             audioWorkletNode.port.onmessage = (event) => {
+                if (state !== 'recording') return;
                 const pcmData = new Float32Array(event.data);
                 audioBuffer.push(pcmData);
 
-                // Send buffered audio every 10 chunks (80ms of audio)
+                // Send buffered audio every 10 chunks (~160ms of audio)
                 if (audioBuffer.length >= 10) {
                     sendBufferedAudio();
                 }
             };
 
             mediaStreamSource.connect(audioWorkletNode);
-            // The AudioWorkletNode does not need to be connected to the destination
-            // to process audio. It runs automatically.
 
         } catch (err) {
             console.error("Microphone error", err);
@@ -252,7 +249,7 @@ function showNotification(message, type = 'info', duration = 5000) {
     };
 
     const sendBufferedAudio = () => {
-        if (audioBuffer.length === 0) return;
+        if (audioBuffer.length === 0 || !websocket || websocket.readyState !== WebSocket.OPEN) return;
 
         const totalLength = audioBuffer.reduce((acc, val) => acc + val.length, 0);
         const concatenated = new Float32Array(totalLength);
@@ -267,12 +264,10 @@ function showNotification(message, type = 'info', duration = 5000) {
             int16Pcm[i] = Math.max(-1, Math.min(1, concatenated[i])) * 32767;
         }
 
-        if (websocket && websocket.readyState === WebSocket.OPEN) {
-            websocket.send(JSON.stringify({
-                type: "audio",
-                data: bufferToBase64(int16Pcm.buffer)
-            }));
-        }
+        websocket.send(JSON.stringify({
+            type: "audio",
+            data: bufferToBase64(int16Pcm.buffer)
+        }));
 
         audioBuffer = []; // Clear the buffer after sending
     };
@@ -281,9 +276,12 @@ function showNotification(message, type = 'info', duration = 5000) {
         if (state !== 'recording') return;
         setState('processing');
 
-        sendBufferedAudio(); // Send any remaining audio in the buffer
+        sendBufferedAudio(); // Send any remaining audio
 
-        // Stop audio processing
+        // Stop the microphone and audio processing
+        if (mediaStreamSource) {
+            mediaStreamSource.mediaStream.getTracks().forEach(track => track.stop());
+        }
         if (mediaRecorderAudioContext) {
             mediaRecorderAudioContext.close().then(() => {
                 mediaRecorderAudioContext = null;
@@ -292,29 +290,17 @@ function showNotification(message, type = 'info', duration = 5000) {
             });
         }
 
-        if (fullTranscript.trim()) {
-            displayFinalTranscript(fullTranscript);
-            // Send the final transcript to the server over WebSocket
-            if (websocket && websocket.readyState === WebSocket.OPEN) {
-                websocket.send(JSON.stringify({
-                    type: "transcript",
-                    data: fullTranscript.trim()
-                }));
-            }
-        } else {
-            showNotification("No speech detected.", "warning");
-            setState('idle');
-            if (websocket) {
-                websocket.close(); // Close the connection if no speech was detected
-            }
+        // Signal to the server that recording has stopped
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+            websocket.send(JSON.stringify({ type: "stop_recording" }));
         }
     };
 
-    const displayPartialTranscript = (text) => {
-        let el = document.getElementById('partial-transcript');
+    const displayInterimTranscript = (text) => {
+        let el = document.getElementById('interim-transcript');
         if (!el) {
             el = document.createElement('div');
-            el.id = 'partial-transcript';
+            el.id = 'interim-transcript';
             el.className = 'p-4 bg-gray-100 dark:bg-gray-700 rounded-lg mb-4 opacity-60';
             conversationEl.appendChild(el);
         }
@@ -323,8 +309,8 @@ function showNotification(message, type = 'info', duration = 5000) {
     };
 
     const displayFinalTranscript = (text) => {
-        let partialEl = document.getElementById('partial-transcript');
-        if (partialEl) partialEl.remove();
+        let interimEl = document.getElementById('interim-transcript');
+        if (interimEl) interimEl.remove();
 
         const el = document.createElement('div');
         el.className = 'p-4 bg-gray-200 dark:bg-gray-800 rounded-lg mb-4 text-right';
