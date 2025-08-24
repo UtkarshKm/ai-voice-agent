@@ -254,6 +254,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     session_id = None
     transcriber = None
+    is_listening = False
 
     try:
         while True:
@@ -262,7 +263,16 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # --- Transcript Processing Callback ---
             async def process_transcript(transcript_text: str):
+                if not is_listening:
+                    logger.info(f"Ignoring stale transcript: {transcript_text}")
+                    return
+
                 logger.info(f"Processing final transcript for session {session_id}: '{transcript_text}'")
+
+                # Not listening anymore once we have a final transcript.
+                # This helps prevent phantom transcripts from being processed.
+                nonlocal is_listening
+                is_listening = False
 
                 # Send final transcript to client for display
                 await websocket.send_text(json.dumps({
@@ -319,6 +329,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     return
 
                 logger.info(f"Configuring WebSocket for session: {session_id}")
+                is_listening = True # Start listening for transcripts
 
                 # Initialize transcriber with the callback
                 transcriber = AssemblyAIStreamingTranscriber(
@@ -328,14 +339,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
 
             elif message["type"] == "audio":
-                if transcriber:
+                if is_listening and transcriber:
                     audio_bytes = base64.b64decode(message["data"])
                     transcriber.stream_audio(audio_bytes)
-                else:
-                    logger.warning("Audio received before transcriber was initialized.")
+                # Silently ignore audio if not in a listening state
 
             elif message["type"] == "stop_recording":
                 logger.info(f"Client signaled end of recording for session {session_id}.")
+                is_listening = False # Stop listening for transcripts
                 if transcriber:
                     transcriber.close()
                     transcriber = None
