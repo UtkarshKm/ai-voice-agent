@@ -263,6 +263,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # --- Transcript Processing Callback ---
             async def process_transcript(transcript_text: str):
+                nonlocal is_listening
                 if not is_listening:
                     logger.info(f"Ignoring stale transcript: {transcript_text}")
                     return
@@ -271,7 +272,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # Not listening anymore once we have a final transcript.
                 # This helps prevent phantom transcripts from being processed.
-                nonlocal is_listening
                 is_listening = False
 
                 # Send final transcript to client for display
