@@ -336,9 +336,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif message["type"] == "stop_recording":
                 logger.info(f"Client signaled end of recording for session {session_id}.")
-                # This message can be used to signal the transcriber to finalize if needed,
-                # but AssemblyAI's turn-based formatting handles this automatically.
-                # We can add logic here if we need to force-end a transcript.
+                if transcriber:
+                    transcriber.close()
+                    transcriber = None
+                    logger.info("Transcriber session closed.")
 
     except WebSocketDisconnect:
         logger.info(f"Client disconnected from session {session_id}.")
