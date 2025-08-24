@@ -42,7 +42,6 @@ class AssemblyAIStreamingTranscriber:
             StreamingParameters(
                 sample_rate=sample_rate,
                 format_turns=True,
-                interim_results=True,
             )
         )
 
@@ -51,22 +50,27 @@ class AssemblyAIStreamingTranscriber:
 
     def on_turn(self, _: StreamingClient, event: TurnEvent):
         transcript = event.transcript
-        print(f'{"interim" if event.interim else "final"}: {transcript}')
+        if not transcript:
+            return
 
-        # Send interim results to the client for real-time feedback
-        if event.interim:
+        print(f"Turn: {transcript} (end_of_turn={event.end_of_turn})")
+
+        # If it's the end of a turn, process it with the callback
+        if event.end_of_turn:
+            if event.turn_is_formatted:
+                # Use the final, formatted transcript for the callback
+                asyncio.run_coroutine_threadsafe(
+                    self.on_transcript_callback(transcript), self.loop
+                )
+            else:
+                # If for some reason the turn isn't formatted yet, request it
+                 self.client.set_params(StreamingSessionParameters(format_turns=True))
+        # Otherwise, it's an interim result, send it to the client for display
+        else:
             coro = self.websocket.send_text(
                 json.dumps({"type": "transcript", "data": transcript})
             )
             asyncio.run_coroutine_threadsafe(coro, self.loop)
-
-        # If it's the end of a turn (a complete sentence), process it
-        if event.end_of_turn and event.turn_is_formatted and transcript:
-            # This is the final, confirmed transcript for the turn.
-            # We call the server-side callback to process it.
-            asyncio.run_coroutine_threadsafe(
-                self.on_transcript_callback(transcript), self.loop
-            )
 
     def on_termination(self, _: StreamingClient, event: TerminationEvent):
         print(f"Session terminated after {event.audio_duration_seconds} s")
