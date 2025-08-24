@@ -102,6 +102,7 @@ function showNotification(message, type = 'info', duration = 5000) {
 
     let websocket = null;
     let state = 'idle';
+    let aiResponseEl = null; // To hold the streaming AI response element
 
     // --- Audio Recording State ---
     let mediaRecorderAudioContext = null;
@@ -195,15 +196,17 @@ function showNotification(message, type = 'info', duration = 5000) {
             websocket.onmessage = (event) => {
                 const message = JSON.parse(event.data);
                 switch (message.type) {
-                    case 'transcript': // Interim results
+                    case 'transcript': // Interim results from AssemblyAI
                         displayInterimTranscript(message.data);
                         break;
                     case 'user_transcript': // Final transcript from user
                         displayFinalTranscript(message.data);
                         break;
-                    case 'llm_response': // Final text from AI
-                        displayLlmResponse(message.text);
-                        setState('idle'); // Ready for next input
+                    case 'llm_chunk': // A chunk of the AI's response
+                        handleLlmChunk(message.data);
+                        break;
+                    case 'llm_end': // The end of the AI's response
+                        handleLlmEnd();
                         break;
                     case 'audio': // Audio stream from AI
                         playAudioChunk(message.data);
@@ -319,12 +322,30 @@ function showNotification(message, type = 'info', duration = 5000) {
         conversationEl.scrollTop = conversationEl.scrollHeight;
     };
 
-    const displayLlmResponse = (text) => {
-        const el = document.createElement('div');
-        el.className = 'p-4 bg-blue-50 dark:bg-blue-900/50 rounded-lg mb-4';
-        el.innerHTML = `<strong class="font-semibold block text-green-600 dark:text-green-400">AI Agent</strong>${text}`;
-        conversationEl.appendChild(el);
+    const handleLlmChunk = (text) => {
+        if (!aiResponseEl) {
+            // Create a new container for the AI's response
+            aiResponseEl = document.createElement('div');
+            aiResponseEl.className = 'p-4 bg-blue-50 dark:bg-blue-900/50 rounded-lg mb-4';
+
+            const strong = document.createElement('strong');
+            strong.className = 'font-semibold block text-green-600 dark:text-green-400';
+            strong.textContent = 'AI Agent';
+            aiResponseEl.appendChild(strong);
+
+            const textSpan = document.createElement('span');
+            aiResponseEl.appendChild(textSpan);
+
+            conversationEl.appendChild(aiResponseEl);
+        }
+        // Append the new chunk to the text content of the span
+        aiResponseEl.querySelector('span').textContent += text;
         conversationEl.scrollTop = conversationEl.scrollHeight;
+    };
+
+    const handleLlmEnd = () => {
+        aiResponseEl = null; // Reset for the next response
+        setState('idle'); // Ready for the next turn
     };
 
     // --- Audio Playback Implementation ---

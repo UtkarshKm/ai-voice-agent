@@ -106,11 +106,13 @@ async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECOND
         # Re-raise as HTTPException
         raise HTTPException(status_code=500, detail="LLM service failed")
 
-async def stream_llm_to_murf(text_stream, websocket: WebSocket):
-    """Streams text to Murf TTS WebSocket and streams audio back to the client."""
+async def stream_llm_to_murf_and_client(text_stream, websocket: WebSocket):
+    """
+    Streams text to Murf TTS and also streams the text chunks to the client's UI.
+    """
     WS_URL = "wss://api.murf.ai/v1/speech/stream-input"
     API_KEY = os.getenv("MURF_API_KEY")
-    CONTEXT_ID = "my_static_context_id_for_streaming"  # Using a static context ID
+    CONTEXT_ID = "my_static_context_id_for_streaming"
 
     if not API_KEY:
         logger.error("MURF_API_KEY environment variable not set.")
@@ -121,31 +123,25 @@ async def stream_llm_to_murf(text_stream, websocket: WebSocket):
     full_text = ""
 
     try:
-        async with websockets.connect(uri) as ws:
+        async with websockets.connect(uri) as murf_ws:
             logger.info("Murf WebSocket connected.")
-            # 1. Send voice configuration
+
+            # 1. Send voice configuration to Murf
             voice_config_msg = {
                 "context_id": CONTEXT_ID,
-                "voice_config": {
-                    "voiceId": "en-US-amara",
-                    "style": "Conversational",
-                }
+                "voice_config": {"voiceId": "en-US-amara", "style": "Conversational"},
             }
-            await ws.send(json.dumps(voice_config_msg))
+            await murf_ws.send(json.dumps(voice_config_msg))
             logger.info("Sent voice config to Murf.")
 
-            # 2. Create a task to receive audio data from Murf and stream to client
-            async def receiver(murf_ws, client_ws):
+            # 2. Task to receive audio from Murf and stream to client
+            async def audio_receiver(m_ws, c_ws):
                 while True:
                     try:
-                        # Add a timeout to the receive operation to prevent indefinite blocking
-                        response = await asyncio.wait_for(murf_ws.recv(), timeout=30.0)
+                        response = await asyncio.wait_for(m_ws.recv(), timeout=30.0)
                         data = json.loads(response)
                         if "audio" in data and data["audio"]:
-                            await client_ws.send_text(json.dumps({
-                                "type": "audio",
-                                "data": data["audio"]
-                            }))
+                            await c_ws.send_text(json.dumps({"type": "audio", "data": data["audio"]}))
                         if data.get("final", False):
                             logger.info("Received final audio packet from Murf.")
                             break
@@ -159,34 +155,30 @@ async def stream_llm_to_murf(text_stream, websocket: WebSocket):
                         logger.error(f"Error receiving from Murf: {e}")
                         break
 
-            receiver_task = asyncio.create_task(receiver(ws, websocket))
+            receiver_task = asyncio.create_task(audio_receiver(murf_ws, websocket))
 
-            # 3. Send text chunks from the LLM stream
+            # 3. Stream LLM text to both Murf and the client UI
             async for chunk in text_stream:
                 if chunk:
                     full_text += chunk
-                    text_msg = {
-                        "context_id": CONTEXT_ID,
-                        "text": chunk
-                    }
-                    await ws.send(json.dumps(text_msg))
-            logger.info("Finished sending LLM text stream to Murf.")
+                    # Send chunk to client for UI display
+                    await websocket.send_text(json.dumps({"type": "llm_chunk", "data": chunk}))
+                    # Send chunk to Murf for TTS
+                    await murf_ws.send(json.dumps({"context_id": CONTEXT_ID, "text": chunk}))
 
-            # 4. Signal the end of the text stream
-            end_msg = {
-                "context_id": CONTEXT_ID,
-                "end": True
-            }
-            await ws.send(json.dumps(end_msg))
-            logger.info("Sent end-of-stream signal to Murf.")
+            logger.info("Finished sending LLM text stream.")
 
-            # 5. Wait for the receiver to finish processing all audio
+            # 4. Signal end of stream to both Murf and client
+            await murf_ws.send(json.dumps({"context_id": CONTEXT_ID, "end": True}))
+            await websocket.send_text(json.dumps({"type": "llm_end"}))
+            logger.info("Sent end-of-stream signals.")
+
+            # 5. Wait for the audio receiver to finish
             await receiver_task
-
-            logger.info("Murf streaming finished.")
+            logger.info("Murf and client streaming finished.")
 
     except Exception as e:
-        logger.error(f"Error during Murf WebSocket streaming: {e}")
+        logger.error(f"Error during streaming: {e}")
 
     return full_text
 
@@ -286,32 +278,32 @@ async def websocket_endpoint(websocket: WebSocket):
                 history.append({"role": "user", "parts": [transcript_text]})
                 history = manage_conversation_history(history)
 
-                # Generate LLM response and stream to TTS
-                llm_text = ""
+                # Generate LLM response and stream to TTS and client
                 try:
                     logger.info(f"Starting LLM/TTS pipeline for session {session_id}...")
                     llm_stream = generate_llm_response(history)
-                    llm_text = await stream_llm_to_murf(llm_stream, websocket)
+
+                    # This function now handles streaming to both Murf and the client
+                    llm_text = await stream_llm_to_murf_and_client(llm_stream, websocket)
 
                     if llm_text:
                         logger.info(f"Full LLM response for {session_id}: '{llm_text[:50]}...'")
                         history.append({"role": "model", "parts": [llm_text]})
-                        # Send the final text response to the client
-                        await websocket.send_text(json.dumps({
-                            "type": "llm_response",
-                            "text": llm_text
-                        }))
                     else:
                         logger.warning(f"LLM response was empty for session {session_id}.")
-                        llm_text = "I tried to respond, but encountered an issue. Please try again."
-                        history.append({"role": "model", "parts": [llm_text]})
-                        await websocket.send_text(json.dumps({"type": "llm_response", "text": llm_text}))
+                        # Send an error to the client if no response was generated
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "detail": "I tried to respond, but encountered an issue."
+                        }))
 
                 except Exception as e:
                     logger.error(f"Error in streaming pipeline for {session_id}: {e}")
-                    llm_text = f"An unexpected error occurred while generating a response."
                     history.pop()  # Pop user message as model failed
-                    await websocket.send_text(json.dumps({"type": "llm_response", "text": llm_text}))
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "detail": "An unexpected error occurred while generating a response."
+                    }))
 
                 # Update session data
                 chat_histories[session_id] = {
