@@ -64,26 +64,40 @@ function showNotification(message, type = 'info', duration = 5000) {
 }
 
 
-// --- Session Management ---
+// --- Session Management & Persona Persistence ---
 (function() {
-    let sessionId = new URLSearchParams(window.location.search).get("session");
+    const urlParams = new URLSearchParams(window.location.search);
+    let sessionId = urlParams.get("session");
+    const persona = urlParams.get("persona") || 'default';
+
+    // Restore persona dropdown selection on load
+    const personaSelectEl = document.getElementById('persona-select');
+    if (personaSelectEl) {
+        personaSelectEl.value = persona;
+    }
+
+    // If no session ID, create one. Preserve persona in URL.
     if (!sessionId) {
         sessionId = crypto.randomUUID();
-        const newUrl = `${window.location.pathname}?session=${sessionId}${window.location.hash}`;
+        const newUrl = `${window.location.pathname}?session=${sessionId}&persona=${persona}${window.location.hash}`;
         window.history.replaceState({ path: newUrl }, '', newUrl);
     }
     window.chatSessionId = sessionId;
 
+    // Update session ID display
     const sessionIdDisplay = document.getElementById("session-id-display");
     if (sessionIdDisplay) {
         sessionIdDisplay.textContent = sessionId.split('-')[0];
         sessionIdDisplay.parentElement.title = `Full Session ID: ${sessionId}`;
     }
 
+    // Handle "New Chat" button click
     const newChatButton = document.getElementById('new-chat-button');
     if (newChatButton) {
         newChatButton.addEventListener('click', () => {
-            window.location.href = window.location.pathname;
+            // Start a new session, but keep the current persona
+            const currentPersona = personaSelectEl ? personaSelectEl.value : 'default';
+            window.location.href = `${window.location.pathname}?persona=${currentPersona}`;
         });
     }
 })();
@@ -94,8 +108,9 @@ function showNotification(message, type = 'info', duration = 5000) {
     const recordBtn = document.getElementById("record-button");
     const statusEl = document.getElementById("llmStatus");
     const conversationEl = document.getElementById("llmConversation");
+    const personaSelectEl = document.getElementById("persona-select"); // Get persona selector
 
-    if (!recordBtn || !statusEl || !conversationEl) {
+    if (!recordBtn || !statusEl || !conversationEl || !personaSelectEl) { // Check for persona selector
         console.error("Required UI elements missing");
         return;
     }
@@ -103,6 +118,7 @@ function showNotification(message, type = 'info', duration = 5000) {
     let websocket = null;
     let state = 'idle';
     let aiResponseEl = null;
+    let currentAiResponseText = ""; // To accumulate AI response text for Markdown parsing
 
     let mediaRecorderAudioContext = null;
     let mediaStreamSource = null;
@@ -124,6 +140,10 @@ function showNotification(message, type = 'info', duration = 5000) {
     const updateUI = () => {
         recordBtn.dataset.state = state;
         recordBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700', 'pulse-ring', 'bg-red-600', 'hover:bg-red-700', 'bg-gray-400', 'cursor-not-allowed');
+
+        // Disable persona selector when not idle
+        personaSelectEl.disabled = state !== 'idle';
+
         switch (state) {
             case 'idle':
                 statusEl.textContent = "Click to start recording";
@@ -223,7 +243,8 @@ function showNotification(message, type = 'info', duration = 5000) {
         websocket.send(JSON.stringify({
             type: "config",
             session_id: window.chatSessionId,
-            sample_rate: 16000
+            sample_rate: 16000,
+            persona: personaSelectEl.value
         }));
 
         try {
@@ -322,22 +343,27 @@ function showNotification(message, type = 'info', duration = 5000) {
 
     const handleLlmChunk = (text) => {
         if (!aiResponseEl) {
+            currentAiResponseText = ""; // Reset for new response
             aiResponseEl = document.createElement('div');
-            aiResponseEl.className = 'p-4 bg-blue-50 dark:bg-blue-900/50 rounded-lg mb-4';
+            // Add a class for styling markdown content
+            aiResponseEl.className = 'p-4 bg-blue-50 dark:bg-blue-900/50 rounded-lg mb-4 prose dark:prose-invert max-w-none';
             const strong = document.createElement('strong');
             strong.className = 'font-semibold block text-green-600 dark:text-green-400';
             strong.textContent = 'AI Agent';
             aiResponseEl.appendChild(strong);
-            const textSpan = document.createElement('span');
-            aiResponseEl.appendChild(textSpan);
+            const contentSpan = document.createElement('span');
+            aiResponseEl.appendChild(contentSpan);
             conversationEl.appendChild(aiResponseEl);
         }
-        aiResponseEl.querySelector('span').textContent += text;
+        currentAiResponseText += text;
+        // Use innerHTML with marked.parse to render Markdown
+        aiResponseEl.querySelector('span').innerHTML = marked.parse(currentAiResponseText);
         conversationEl.scrollTop = conversationEl.scrollHeight;
     };
 
     const handleLlmEnd = () => {
         aiResponseEl = null;
+        currentAiResponseText = ""; // Clear the accumulator
         setState('idle');
     };
 
@@ -408,6 +434,13 @@ function showNotification(message, type = 'info', duration = 5000) {
     recordBtn.addEventListener('click', () => {
         if (state === 'idle') startRecording();
         else if (state === 'recording') stopRecording();
+    });
+
+    // Add event listener for persona changes
+    personaSelectEl.addEventListener('change', () => {
+        // Changing persona starts a new chat session with the new persona
+        const newPersona = personaSelectEl.value;
+        window.location.href = `${window.location.pathname}?persona=${newPersona}`;
     });
 
     initializeWebSocket();
