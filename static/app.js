@@ -64,26 +64,40 @@ function showNotification(message, type = 'info', duration = 5000) {
 }
 
 
-// --- Session Management ---
+// --- Session Management & Persona Persistence ---
 (function() {
-    let sessionId = new URLSearchParams(window.location.search).get("session");
+    const urlParams = new URLSearchParams(window.location.search);
+    let sessionId = urlParams.get("session");
+    const persona = urlParams.get("persona") || 'default';
+
+    // Restore persona dropdown selection on load
+    const personaSelectEl = document.getElementById('persona-select');
+    if (personaSelectEl) {
+        personaSelectEl.value = persona;
+    }
+
+    // If no session ID, create one. Preserve persona in URL.
     if (!sessionId) {
         sessionId = crypto.randomUUID();
-        const newUrl = `${window.location.pathname}?session=${sessionId}${window.location.hash}`;
+        const newUrl = `${window.location.pathname}?session=${sessionId}&persona=${persona}${window.location.hash}`;
         window.history.replaceState({ path: newUrl }, '', newUrl);
     }
     window.chatSessionId = sessionId;
 
+    // Update session ID display
     const sessionIdDisplay = document.getElementById("session-id-display");
     if (sessionIdDisplay) {
         sessionIdDisplay.textContent = sessionId.split('-')[0];
         sessionIdDisplay.parentElement.title = `Full Session ID: ${sessionId}`;
     }
 
+    // Handle "New Chat" button click
     const newChatButton = document.getElementById('new-chat-button');
     if (newChatButton) {
         newChatButton.addEventListener('click', () => {
-            window.location.href = window.location.pathname;
+            // Start a new session, but keep the current persona
+            const currentPersona = personaSelectEl ? personaSelectEl.value : 'default';
+            window.location.href = `${window.location.pathname}?persona=${currentPersona}`;
         });
     }
 })();
@@ -418,8 +432,9 @@ function showNotification(message, type = 'info', duration = 5000) {
 
     // Add event listener for persona changes
     personaSelectEl.addEventListener('change', () => {
-        // Changing persona starts a new chat session
-        window.location.href = window.location.pathname;
+        // Changing persona starts a new chat session with the new persona
+        const newPersona = personaSelectEl.value;
+        window.location.href = `${window.location.pathname}?persona=${newPersona}`;
     });
 
     initializeWebSocket();
