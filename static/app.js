@@ -118,6 +118,7 @@ function showNotification(message, type = 'info', duration = 5000) {
     let websocket = null;
     let state = 'idle';
     let aiResponseEl = null;
+    let currentAiResponseText = ""; // To accumulate AI response text for Markdown parsing
 
     let mediaRecorderAudioContext = null;
     let mediaStreamSource = null;
@@ -342,22 +343,27 @@ function showNotification(message, type = 'info', duration = 5000) {
 
     const handleLlmChunk = (text) => {
         if (!aiResponseEl) {
+            currentAiResponseText = ""; // Reset for new response
             aiResponseEl = document.createElement('div');
-            aiResponseEl.className = 'p-4 bg-blue-50 dark:bg-blue-900/50 rounded-lg mb-4';
+            // Add a class for styling markdown content
+            aiResponseEl.className = 'p-4 bg-blue-50 dark:bg-blue-900/50 rounded-lg mb-4 prose dark:prose-invert max-w-none';
             const strong = document.createElement('strong');
             strong.className = 'font-semibold block text-green-600 dark:text-green-400';
             strong.textContent = 'AI Agent';
             aiResponseEl.appendChild(strong);
-            const textSpan = document.createElement('span');
-            aiResponseEl.appendChild(textSpan);
+            const contentSpan = document.createElement('span');
+            aiResponseEl.appendChild(contentSpan);
             conversationEl.appendChild(aiResponseEl);
         }
-        aiResponseEl.querySelector('span').textContent += text;
+        currentAiResponseText += text;
+        // Use innerHTML with marked.parse to render Markdown
+        aiResponseEl.querySelector('span').innerHTML = marked.parse(currentAiResponseText);
         conversationEl.scrollTop = conversationEl.scrollHeight;
     };
 
     const handleLlmEnd = () => {
         aiResponseEl = null;
+        currentAiResponseText = ""; // Clear the accumulator
         setState('idle');
     };
 
