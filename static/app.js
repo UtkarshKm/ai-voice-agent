@@ -94,8 +94,9 @@ function showNotification(message, type = 'info', duration = 5000) {
     const recordBtn = document.getElementById("record-button");
     const statusEl = document.getElementById("llmStatus");
     const conversationEl = document.getElementById("llmConversation");
+    const personaSelectEl = document.getElementById("persona-select"); // Get persona selector
 
-    if (!recordBtn || !statusEl || !conversationEl) {
+    if (!recordBtn || !statusEl || !conversationEl || !personaSelectEl) { // Check for persona selector
         console.error("Required UI elements missing");
         return;
     }
@@ -124,6 +125,10 @@ function showNotification(message, type = 'info', duration = 5000) {
     const updateUI = () => {
         recordBtn.dataset.state = state;
         recordBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700', 'pulse-ring', 'bg-red-600', 'hover:bg-red-700', 'bg-gray-400', 'cursor-not-allowed');
+
+        // Disable persona selector when not idle
+        personaSelectEl.disabled = state !== 'idle';
+
         switch (state) {
             case 'idle':
                 statusEl.textContent = "Click to start recording";
@@ -223,7 +228,8 @@ function showNotification(message, type = 'info', duration = 5000) {
         websocket.send(JSON.stringify({
             type: "config",
             session_id: window.chatSessionId,
-            sample_rate: 16000
+            sample_rate: 16000,
+            persona: personaSelectEl.value
         }));
 
         try {
@@ -408,6 +414,12 @@ function showNotification(message, type = 'info', duration = 5000) {
     recordBtn.addEventListener('click', () => {
         if (state === 'idle') startRecording();
         else if (state === 'recording') stopRecording();
+    });
+
+    // Add event listener for persona changes
+    personaSelectEl.addEventListener('change', () => {
+        // Changing persona starts a new chat session
+        window.location.href = window.location.pathname;
     });
 
     initializeWebSocket();

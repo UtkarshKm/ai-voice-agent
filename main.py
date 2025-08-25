@@ -17,6 +17,7 @@ import base64
 from typing import AsyncGenerator
 from contextlib import asynccontextmanager
 from transcriber import AssemblyAIStreamingTranscriber
+from persona import PERSONAS
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -78,10 +79,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class ChatRequest(BaseModel):
     transcript: str
 
-async def generate_llm_response(history: list, timeout: int = API_TIMEOUT_SECONDS) -> AsyncGenerator[str, None]:
+async def generate_llm_response(history: list, persona: str = PERSONAS["default"], timeout: int = API_TIMEOUT_SECONDS) -> AsyncGenerator[str, None]:
     """Generate LLM response as an async stream with timeout handling."""
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel(
+            'gemini-1.5-flash',
+            system_instruction=persona
+        )
         
         async def internal_generator():
             logger.info("Starting LLM async stream generation...")
@@ -280,10 +284,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "data": transcript_text
                 }))
 
-                # Retrieve or create chat history
-                session_data = chat_histories.get(session_id, {
-                    "history": [], "last_accessed": datetime.now()
-                })
+                # Retrieve chat history (persona is already set from 'config')
+                session_data = chat_histories[session_id]
                 history = session_data["history"]
                 history.append({"role": "user", "parts": [transcript_text]})
                 history = manage_conversation_history(history)
@@ -291,7 +293,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Generate LLM response and stream to TTS and client
                 try:
                     logger.info(f"Starting LLM/TTS pipeline for session {session_id}...")
-                    llm_stream = generate_llm_response(history)
+                    persona_prompt = session_data.get("persona_prompt", PERSONAS["default"])
+                    llm_stream = generate_llm_response(history, persona=persona_prompt)
 
                     # This function now handles streaming to both Murf and the client
                     llm_text = await stream_llm_to_murf_and_client(llm_stream, websocket)
@@ -328,7 +331,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.close(code=1008, reason="Session ID is required")
                     return
 
-                logger.info(f"Configuring WebSocket for session: {session_id}")
+                # Get persona from client, fallback to "default"
+                persona_key = message.get("persona", "default")
+                persona_prompt = PERSONAS.get(persona_key, PERSONAS["default"])
+                logger.info(f"Configuring session {session_id} with persona: {persona_key}")
+
+                # Store the persona choice in the session data
+                if session_id not in chat_histories:
+                    chat_histories[session_id] = {"history": [], "persona_prompt": persona_prompt, "last_accessed": datetime.now()}
+                else:
+                    chat_histories[session_id]["persona_prompt"] = persona_prompt
+
                 is_listening = True # Start listening for transcripts
 
                 # Initialize transcriber with the callback
