@@ -308,28 +308,22 @@ async def websocket_endpoint(websocket: WebSocket):
                         tools=[weather_tool]
                     )
 
-                    # 2. Start a streaming generation. The `await` returns an `AsyncGenerateContentResponse` object.
-                    response = await model.generate_content_async(history, stream=True)
+                    # 2. Make a non-streaming call to check for function calls first.
+                    logger.info("Making non-streaming call to check for tool use...")
+                    initial_response = await model.generate_content_async(history) # stream=False is default
 
-                    # The actual async iterator is in the .iterator attribute of the response object.
-                    response_iterator = response.iterator
-
-                    # 3. Check the first chunk for a function call
-                    first_chunk = None
+                    # 3. Check for a function call in the response
+                    function_call = None
                     try:
-                        first_chunk = await anext(response_iterator)
-                    except StopAsyncIteration:
-                        logger.warning(f"LLM stream was empty for session {session_id}.")
-                        await websocket.send_text(json.dumps({"type": "error", "detail": "I received an empty response."}))
-                        return
+                        function_call = initial_response.candidates[0].content.parts[0].function_call
+                    except (IndexError, AttributeError):
+                        pass # No function call found
 
-                    # Check for a function call in the first part of the response
-                    if first_chunk.candidates and first_chunk.candidates[0].content.parts and first_chunk.candidates[0].content.parts[0].function_call:
-                        function_call = first_chunk.candidates[0].content.parts[0].function_call
+                    if function_call:
                         logger.info(f"LLM requested to call function: {function_call.name}")
 
                         # Add the model's tool request to history
-                        history.append({"role": "model", "parts": first_chunk.candidates[0].content.parts})
+                        history.append(initial_response.candidates[0].content)
 
                         # 4. If it's the weather function, execute it
                         if function_call.name == "get_current_weather":
@@ -338,7 +332,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             weather_result = get_current_weather(city=city)
                             logger.info(f"Weather result: {weather_result}")
 
-                            # 5. Send the result back to the model
+                            # 5. Send the result back to the model in a new, streaming call
                             history.append({
                                 "role": "tool",
                                 "parts": [
@@ -349,29 +343,35 @@ async def websocket_endpoint(websocket: WebSocket):
                                 ]
                             })
 
-                            final_response = await model.generate_content_async(history, stream=True)
+                            final_response_stream = await model.generate_content_async(history, stream=True)
 
                             async def text_stream_generator(stream):
+                                # The stream from the second call is a proper async iterator
                                 async for chunk in stream:
                                     if hasattr(chunk, 'text') and chunk.text:
                                         yield chunk.text
 
-                            llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response.iterator), websocket)
+                            llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response_stream), websocket)
                         else:
                             logger.error(f"Unknown function call received: {function_call.name}")
 
                     else:
-                        # 6. If not a function call, process as a normal text stream
-                        logger.info("No function call, processing as text stream.")
+                        # 6. No function call, so process the text from the initial response.
+                        logger.info("No function call, processing direct text response.")
 
-                        async def combined_stream_generator(first, rest_stream):
-                            if hasattr(first, 'text') and first.text:
-                                yield first.text
-                            async for chunk in rest_stream:
-                                if hasattr(chunk, 'text') and chunk.text:
-                                    yield chunk.text
+                        # Create a "fake" async stream for the text to pass to the audio pipeline
+                        async def text_stream_generator(text):
+                            if text:
+                                yield text
 
-                        llm_text = await stream_llm_to_murf_and_client(combined_stream_generator(first_chunk, response_iterator), websocket)
+                        response_text = ""
+                        try:
+                            response_text = initial_response.text
+                        except ValueError:
+                             # This can happen if the response was blocked.
+                             logger.warning("Response was blocked or had no content.")
+
+                        llm_text = await stream_llm_to_murf_and_client(text_stream_generator(response_text), websocket)
 
                     # Update history with the final model response
                     if llm_text:
