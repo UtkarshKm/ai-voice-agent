@@ -308,25 +308,16 @@ async def websocket_endpoint(websocket: WebSocket):
                         tools=[weather_tool]
                     )
 
-                    # 2. Start a streaming generation
-                    logger.info("Generating content with stream=True...")
-                    response_stream = await model.generate_content_async(history, stream=True)
-                    logger.info(f"Type of response_stream: {type(response_stream)}")
+                    # 2. Start a streaming generation. The `await` returns an `AsyncGenerateContentResponse` object.
+                    response = await model.generate_content_async(history, stream=True)
 
+                    # The actual async iterator is in the .iterator attribute of the response object.
+                    response_iterator = response.iterator
 
                     # 3. Check the first chunk for a function call
                     first_chunk = None
                     try:
-                        logger.info("Attempting to get first chunk with anext()...")
-                        first_chunk = await anext(response_stream)
-                        logger.info("Successfully got first chunk.")
-                    except TypeError:
-                        logger.error(f"TypeError on anext(). The response_stream object (type: {type(response_stream)}) is not an async iterator. Object details: {response_stream}", exc_info=True)
-                        # This case is unexpected, but we'll try to handle it by assuming it's the full response
-                        if hasattr(response_stream, 'candidates'):
-                             first_chunk = response_stream
-                        else:
-                             raise # Re-raise if we can't handle it
+                        first_chunk = await anext(response_iterator)
                     except StopAsyncIteration:
                         logger.warning(f"LLM stream was empty for session {session_id}.")
                         await websocket.send_text(json.dumps({"type": "error", "detail": "I received an empty response."}))
@@ -358,14 +349,14 @@ async def websocket_endpoint(websocket: WebSocket):
                                 ]
                             })
 
-                            final_response_stream = await model.generate_content_async(history, stream=True)
+                            final_response = await model.generate_content_async(history, stream=True)
 
                             async def text_stream_generator(stream):
                                 async for chunk in stream:
                                     if hasattr(chunk, 'text') and chunk.text:
                                         yield chunk.text
 
-                            llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response_stream), websocket)
+                            llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response.iterator), websocket)
                         else:
                             logger.error(f"Unknown function call received: {function_call.name}")
 
@@ -380,7 +371,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 if hasattr(chunk, 'text') and chunk.text:
                                     yield chunk.text
 
-                        llm_text = await stream_llm_to_murf_and_client(combined_stream_generator(first_chunk, response_stream), websocket)
+                        llm_text = await stream_llm_to_murf_and_client(combined_stream_generator(first_chunk, response_iterator), websocket)
 
                     # Update history with the final model response
                     if llm_text:
