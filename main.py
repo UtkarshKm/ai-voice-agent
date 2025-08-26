@@ -335,12 +335,12 @@ async def websocket_endpoint(websocket: WebSocket):
                             # 5. Send the result back to the model in a new, streaming call
                             history.append({
                                 "role": "tool",
-                                "parts": [
-                                    types.Part.from_function_response(
-                                        name="get_current_weather",
-                                        response=weather_result
-                                    )
-                                ]
+                                "parts": [{
+                                    "function_response": {
+                                        "name": "get_current_weather",
+                                        "response": weather_result,
+                                    }
+                                }]
                             })
 
                             final_response_stream = await model.generate_content_async(history, stream=True)
