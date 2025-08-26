@@ -309,7 +309,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
 
                     # 2. Start a streaming generation
-                    response_stream = await model.generate_content_async(history, stream=True)
+                    response_stream = model.generate_content_async(history, stream=True)
 
                     # 3. Check the first chunk for a function call
                     first_chunk = None
@@ -346,7 +346,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 ]
                             })
 
-                            final_response_stream = await model.generate_content_async(history, stream=True)
+                            final_response_stream = model.generate_content_async(history, stream=True)
 
                             async def text_stream_generator(stream):
                                 async for chunk in stream:
