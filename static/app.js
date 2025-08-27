@@ -66,6 +66,7 @@ function showNotification(message, type = 'info', duration = 5000) {
 
 // --- Session Management & Persona Persistence ---
 (function() {
+    console.log("Session management starting...");
     const urlParams = new URLSearchParams(window.location.search);
     let sessionId = urlParams.get("session");
     const persona = urlParams.get("persona") || 'default';
@@ -78,6 +79,7 @@ function showNotification(message, type = 'info', duration = 5000) {
 
     // If no session ID, create one. Preserve persona in URL.
     if (!sessionId) {
+        console.log("No session ID found. Creating a new one.");
         sessionId = crypto.randomUUID();
         const newUrl = `${window.location.pathname}?session=${sessionId}&persona=${persona}${window.location.hash}`;
         window.history.replaceState({ path: newUrl }, '', newUrl);
@@ -178,16 +180,17 @@ function showNotification(message, type = 'info', duration = 5000) {
     }
 
     const initializeWebSocket = () => {
+        console.log("Initializing WebSocket...");
         setState('connecting');
         websocket = new WebSocket(`ws://${window.location.host}/ws`);
 
         websocket.onopen = () => {
-            console.log("WebSocket connected.");
+            console.log("WebSocket.onopen event fired. Connection successful.");
             setState('idle');
         };
 
         websocket.onerror = (e) => {
-            console.error("WebSocket error:", e);
+            console.error("WebSocket.onerror event fired:", e);
             showNotification("Connection error. Please refresh.", "error");
             setState('idle');
         };
@@ -218,7 +221,7 @@ function showNotification(message, type = 'info', duration = 5000) {
         };
 
         websocket.onclose = () => {
-            console.log("WebSocket disconnected.");
+            console.log("WebSocket.onclose event fired.");
             setState('idle');
             recordBtn.disabled = true;
             statusEl.textContent = "Connection lost. Please refresh.";
