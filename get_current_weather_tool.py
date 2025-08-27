@@ -33,8 +33,8 @@ def get_current_weather(city: str):
         }
 
 
-# Define a function that the model can call to control smart lights
-set_light_values_declaration = {
+# Define the function declaration for the weather tool.
+get_current_weather_declaration = {
     "name": "get_current_weather",
     "description": "Get the current weather in a given city.",
     "parameters": {

@@ -18,6 +18,7 @@ from typing import AsyncGenerator
 from contextlib import asynccontextmanager
 from transcriber import AssemblyAIStreamingTranscriber
 from persona import PERSONAS
+from get_current_weather_tool import get_current_weather, get_current_weather_declaration
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +32,7 @@ aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
 
 # Configure Google GenAI
 genai.configure(api_key=os.getenv("GOOGLE_GENAI_API_KEY"))
+from google.generativeai import types
 
 # Configuration constants
 MAX_HISTORY_LENGTH = 50
@@ -39,6 +41,9 @@ SESSION_CLEANUP_HOURS = 24
 API_TIMEOUT_SECONDS = 30
 MAX_AUDIO_DURATION = 60  # Maximum 60 seconds to prevent excessive costs
 MIN_AUDIO_DURATION = 0.5  # Minimum 0.5 seconds to avoid empty audio
+
+# Create the weather tool from the declaration
+weather_tool = types.Tool(function_declarations=[get_current_weather_declaration])
 
 # In-memory datastore for chat histories
 chat_histories = {}
@@ -290,29 +295,95 @@ async def websocket_endpoint(websocket: WebSocket):
                 history.append({"role": "user", "parts": [transcript_text]})
                 history = manage_conversation_history(history)
 
-                # Generate LLM response and stream to TTS and client
+                # Generate LLM response with function calling and stream to TTS and client
                 try:
                     logger.info(f"Starting LLM/TTS pipeline for session {session_id}...")
                     persona_prompt = session_data.get("persona_prompt", PERSONAS["default"])
-                    llm_stream = generate_llm_response(history, persona=persona_prompt)
+                    llm_text = ""
 
-                    # This function now handles streaming to both Murf and the client
-                    llm_text = await stream_llm_to_murf_and_client(llm_stream, websocket)
+                    # 1. Instantiate the model with the weather tool
+                    model = genai.GenerativeModel(
+                        'gemini-2.0-flash',
+                        system_instruction=persona_prompt,
+                        tools=[weather_tool]
+                    )
 
+                    # 2. Make a non-streaming call to check for function calls first.
+                    logger.info("Making non-streaming call to check for tool use...")
+                    initial_response = await model.generate_content_async(history) # stream=False is default
+
+                    # 3. Check for a function call in the response
+                    function_call = None
+                    try:
+                        function_call = initial_response.candidates[0].content.parts[0].function_call
+                    except (IndexError, AttributeError):
+                        pass # No function call found
+
+                    if function_call:
+                        logger.info(f"LLM requested to call function: {function_call.name}")
+
+                        # Add the model's tool request to history
+                        history.append(initial_response.candidates[0].content)
+
+                        # 4. If it's the weather function, execute it
+                        if function_call.name == "get_current_weather":
+                            city = function_call.args.get("city")
+                            logger.info(f"Calling get_current_weather for city: {city}")
+                            weather_result = get_current_weather(city=city)
+                            logger.info(f"Weather result: {weather_result}")
+
+                            # 5. Send the result back to the model in a new, streaming call
+                            history.append({
+                                "role": "tool",
+                                "parts": [{
+                                    "function_response": {
+                                        "name": "get_current_weather",
+                                        "response": weather_result,
+                                    }
+                                }]
+                            })
+
+                            final_response_stream = await model.generate_content_async(history, stream=True)
+
+                            async def text_stream_generator(stream):
+                                # The stream from the second call is a proper async iterator
+                                async for chunk in stream:
+                                    if hasattr(chunk, 'text') and chunk.text:
+                                        yield chunk.text
+
+                            llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response_stream), websocket)
+                        else:
+                            logger.error(f"Unknown function call received: {function_call.name}")
+
+                    else:
+                        # 6. No function call, so process the text from the initial response.
+                        logger.info("No function call, processing direct text response.")
+
+                        # Create a "fake" async stream for the text to pass to the audio pipeline
+                        async def text_stream_generator(text):
+                            if text:
+                                yield text
+
+                        response_text = ""
+                        try:
+                            response_text = initial_response.text
+                        except ValueError:
+                             # This can happen if the response was blocked.
+                             logger.warning("Response was blocked or had no content.")
+
+                        llm_text = await stream_llm_to_murf_and_client(text_stream_generator(response_text), websocket)
+
+                    # Update history with the final model response
                     if llm_text:
                         logger.info(f"Full LLM response for {session_id}: '{llm_text[:50]}...'")
                         history.append({"role": "model", "parts": [llm_text]})
                     else:
                         logger.warning(f"LLM response was empty for session {session_id}.")
-                        # Send an error to the client if no response was generated
-                        await websocket.send_text(json.dumps({
-                            "type": "error",
-                            "detail": "I tried to respond, but encountered an issue."
-                        }))
 
                 except Exception as e:
-                    logger.error(f"Error in streaming pipeline for {session_id}: {e}")
-                    history.pop()  # Pop user message as model failed
+                    logger.error(f"Error in streaming pipeline for {session_id}: {e}", exc_info=True)
+                    if history and history[-1]["role"] == "user":
+                        history.pop()
                     await websocket.send_text(json.dumps({
                         "type": "error",
                         "detail": "An unexpected error occurred while generating a response."
