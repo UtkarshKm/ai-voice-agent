@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from transcriber import AssemblyAIStreamingTranscriber
 from persona import PERSONAS
 from get_current_weather_tool import get_current_weather, get_current_weather_declaration
+from web_search_tool import web_search, web_search_declaration
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +45,11 @@ MIN_AUDIO_DURATION = 0.5  # Minimum 0.5 seconds to avoid empty audio
 
 # Create the weather tool from the declaration
 weather_tool = types.Tool(function_declarations=[get_current_weather_declaration])
+# Create the search tool
+search_tool = types.Tool(function_declarations=[web_search_declaration])
+
+# Combine all tools
+all_tools = [weather_tool, search_tool]
 
 # In-memory datastore for chat histories
 chat_histories = {}
@@ -301,23 +307,23 @@ async def websocket_endpoint(websocket: WebSocket):
                     persona_prompt = session_data.get("persona_prompt", PERSONAS["default"])
                     llm_text = ""
 
-                    # 1. Instantiate the model with the weather tool
+                    # 1. Instantiate the model with all available tools
                     model = genai.GenerativeModel(
-                        'gemini-2.0-flash',
+                        'gemini-1.5-flash',
                         system_instruction=persona_prompt,
-                        tools=[weather_tool]
+                        tools=all_tools
                     )
 
                     # 2. Make a non-streaming call to check for function calls first.
                     logger.info("Making non-streaming call to check for tool use...")
-                    initial_response = await model.generate_content_async(history) # stream=False is default
+                    initial_response = await model.generate_content_async(history)
 
                     # 3. Check for a function call in the response
                     function_call = None
                     try:
                         function_call = initial_response.candidates[0].content.parts[0].function_call
                     except (IndexError, AttributeError):
-                        pass # No function call found
+                        pass  # No function call found
 
                     if function_call:
                         logger.info(f"LLM requested to call function: {function_call.name}")
@@ -325,14 +331,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Add the model's tool request to history
                         history.append(initial_response.candidates[0].content)
 
-                        # 4. If it's the weather function, execute it
+                        # 4. Execute the requested function
                         if function_call.name == "get_current_weather":
                             city = function_call.args.get("city")
                             logger.info(f"Calling get_current_weather for city: {city}")
                             weather_result = get_current_weather(city=city)
                             logger.info(f"Weather result: {weather_result}")
 
-                            # 5. Send the result back to the model in a new, streaming call
+                            # 5. Send the result back to the model
                             history.append({
                                 "role": "tool",
                                 "parts": [{
@@ -343,17 +349,36 @@ async def websocket_endpoint(websocket: WebSocket):
                                 }]
                             })
 
-                            final_response_stream = await model.generate_content_async(history, stream=True)
+                        elif function_call.name == "web_search":
+                            query = function_call.args.get("query")
+                            logger.info(f"Calling web_search for query: {query}")
+                            search_result = web_search(query=query)
+                            logger.info(f"Search result: {search_result[:100]}...") # Log snippet
 
-                            async def text_stream_generator(stream):
-                                # The stream from the second call is a proper async iterator
-                                async for chunk in stream:
-                                    if hasattr(chunk, 'text') and chunk.text:
-                                        yield chunk.text
-
-                            llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response_stream), websocket)
+                            # 5. Send the result back to the model
+                            history.append({
+                                "role": "tool",
+                                "parts": [{
+                                    "function_response": {
+                                        "name": "web_search",
+                                        "response": {"result": search_result},
+                                    }
+                                }]
+                            })
                         else:
                             logger.error(f"Unknown function call received: {function_call.name}")
+                            # To prevent getting stuck, maybe send back an error message to the model?
+                            # For now, we just log it.
+
+                        # 6. Get the final response from the model in a new, streaming call
+                        final_response_stream = await model.generate_content_async(history, stream=True)
+
+                        async def text_stream_generator(stream):
+                            async for chunk in stream:
+                                if hasattr(chunk, 'text') and chunk.text:
+                                    yield chunk.text
+
+                        llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response_stream), websocket)
 
                     else:
                         # 6. No function call, so process the text from the initial response.
