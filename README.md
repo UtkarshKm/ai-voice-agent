@@ -11,13 +11,23 @@ This project is a conversational AI voice agent that listens to your questions a
 
 ## ✨ Features
 
-*   **Voice-based Interaction:** Speak to the AI in your natural voice.
-*   **Real-time Conversation:** Get fast and relevant responses from the AI.
-*   **Session Management:** The conversation history is maintained throughout a session.
-*   **Cost Optimization:** Uses efficient AI models and techniques to minimize operational costs.
-*   **Health & Usage Monitoring:** Endpoints to check the application's status and API credit usage.
-*   **Real-time Audio Playback:** The AI's voice is streamed back to you in real-time, creating a more natural and responsive conversation.
-*   **Responsive Design:** Works on both desktop and mobile browsers.
+This AI agent is more than just a chatbot. It comes packed with advanced features to provide a rich, interactive, and highly customizable conversational experience.
+
+*   **Real-time Streaming Conversation:** Experience a natural, low-latency conversation. The agent processes your speech in real-time, and both the AI's text response and synthesized voice are streamed back to the client as they are generated.
+
+*   **Dynamic AI Personas:** Tailor the AI's personality to your preference. Choose from a dropdown menu of predefined personas (e.g., "Default," "Sarcastic Assistant") to change the AI's conversational style.
+
+*   **Integrated AI Tools (Function Calling):** The agent can access external tools to answer questions about real-world, real-time information:
+    *   **🌐 Web Search:** Ask about current events, news, or any topic on the internet.
+    *   **☀️ Current Weather:** Get the current weather conditions for any city.
+
+*   **Client-Side API Key Management:** A secure and flexible way to manage API credentials. You can enter your own API keys for AssemblyAI, Google Gemini, Murf, and Tavily directly into a settings modal in the browser. These keys are stored locally in your browser and are used for the duration of your session, providing enhanced privacy and control.
+
+*   **Comprehensive Session Management:** Your conversation history is maintained throughout a browser session. You can start a new chat at any time, and your session is identified by a unique ID in the URL.
+
+*   **Health & Usage Monitoring:** The backend provides API endpoints (`/health` and `/usage`) to monitor the application's status and track estimated API credit usage.
+
+*   **Modern, Responsive Interface:** The UI is built with Tailwind CSS for a clean look and is fully responsive, working seamlessly on both desktop and mobile browsers.
 
 ## 🛠️ Technologies Used
 
@@ -36,42 +46,60 @@ This project is a conversational AI voice agent that listens to your questions a
 *   **MediaRecorder API:** A browser API used to record audio from the user's microphone.
 *   **Web Audio API:** Used to play the incoming audio stream from the AI in real-time, providing a seamless playback experience.
 
-## How it Works
+## 📂 Project Structure
 
-The application uses a combination of real-time speech-to-text, a generative AI model, and a text-to-speech service to create a seamless conversational experience. Here is the step-by-step flow:
+Here is an overview of the key files and directories in the project:
 
-1.  **Real-time Transcription:**
-    *   When you click the "Record" button, your browser captures microphone audio using the **MediaRecorder API**.
-    *   This audio is sent to the backend over a WebSocket connection.
-    *   The backend forwards the audio stream to **AssemblyAI**, which performs real-time transcription and sends the text back to the browser for immediate display.
+| File/Directory | Description |
+| :--- | :--- |
+| `main.py` | The core **FastAPI** backend server. It handles WebSocket connections, manages conversation sessions, integrates with AI services (Gemini, Murf), and orchestrates the entire application flow. |
+| `transcriber.py` | Contains the `AssemblyAIStreamingTranscriber` class, a dedicated module to handle real-time speech-to-text using the AssemblyAI service. |
+| `persona.py` | Defines the different AI **personas** (e.g., "default," "sarcastic") that can be selected in the UI to change the AI's personality. |
+| `get_current_weather_tool.py` | Implements the **function calling** tool for fetching the current weather. |
+| `web_search_tool.py` | Implements the **function calling** tool for performing web searches using the Tavily API. |
+| `requirements.txt` | Lists all the Python dependencies for the project. |
+| `static/` | A directory containing all frontend assets. |
+| `static/index.html` | The main HTML file for the user interface. |
+| `static/app.js` | The core frontend JavaScript file. It manages the UI state, handles user interactions (recording, settings), and communicates with the backend via WebSockets. |
+| `static/audio-processor.js` | An **AudioWorklet** processor that runs in a separate thread to capture and buffer audio from the microphone efficiently, preventing UI freezes. |
 
-2.  **Generating and Streaming the AI's Response:**
-    *   When you stop recording, the final transcript is sent to the backend.
-    *   The backend sends the transcript to the **Google Gemini** model, which generates an intelligent response as a stream of text chunks.
-    *   As each text chunk is received from Gemini, it is immediately forwarded to **Murf AI's WebSocket API** for real-time text-to-speech conversion.
+## ⚙️ How it Works
 
-3.  **Real-time Audio Playback:**
-    *   Murf AI streams the synthesized voice back to the backend, which immediately forwards the audio chunks to the browser over the existing WebSocket.
-    *   The browser uses the **Web Audio API** to play these audio chunks as they arrive. This ensures a low-latency, seamless playback of the AI's voice, creating a natural conversational flow. The client-side implementation for this is inspired by the [official Murf AI cookbook example](https://github.com/murf-ai/murf-cookbook/blob/main/examples/text-to-speech/js/websocket/basic/index.js).
-    *   Simultaneously, the full text of the AI's response is sent to the browser and displayed in the chat window.
+The application orchestrates a sophisticated, real-time pipeline between the browser, the backend server, and multiple AI services. Here is the detailed, step-by-step workflow:
 
-## Key Changes (July 2024)
+1.  **Initiation & Configuration:**
+    *   When you click the "Record" button, the frontend sends a `config` message to the backend over a WebSocket. This message includes the current `session_id`, the selected AI `persona`, and any client-side API keys you've provided.
 
-This application was recently updated to fix a critical bug in the application flow and to enhance the backend's functionality.
+2.  **Efficient Audio Capture:**
+    *   The browser uses the modern **`AudioWorklet` API** to capture microphone audio. This runs in a separate thread, preventing UI lag.
+    *   The worklet buffers the raw audio into larger chunks suitable for the transcription service and sends them to the backend.
 
-*   **Fixed Application Flow:** The frontend is now correctly connected to the backend agent. Previously, the real-time transcription was displayed but never sent to the LLM for a response. The frontend now captures the final transcript and sends it to the backend to be processed.
+3.  **Real-time Transcription:**
+    *   The backend receives the audio chunks and streams them to **AssemblyAI** for transcription.
+    *   As AssemblyAI generates transcripts, it sends back two types of events:
+        *   **Interim results:** These are sent immediately to the UI for you to see what the AI is "hearing" in real-time.
+        *   **Final transcript:** Once you stop talking, a final, more accurate transcript is generated.
 
-*   **Backend Refactoring:** The main conversational endpoint (`/agent/chat/{session_id}`) has been refactored. It now accepts a text transcript directly in a JSON payload, making it more efficient. The previous implementation required the backend to accept an audio file and perform its own redundant transcription.
+4.  **LLM Processing & Tool Use:**
+    *   The final transcript is passed to the **Google Gemini** model.
+    *   The model first analyzes the transcript to determine if it needs to use a **tool** to answer the query.
+    *   **If a tool is needed:**
+        *   The model returns a *function call* request to the backend (e.g., `get_current_weather(city="Boston")`).
+        *   The backend executes the corresponding Python function.
+        *   The result from the tool (e.g., the weather data) is sent back to the Gemini model.
+        *   The model uses this new information to generate its final, informed response.
+    *   **If no tool is needed:** The model generates a response directly based on the conversation history and the latest transcript.
 
-*   **LLM Response Streaming:** The backend now streams the response from the Google Gemini API. As the response is being generated, the text chunks are printed to the server's console logs in real-time. This is useful for debugging and observing the AI's response generation.
+5.  **Dual Streaming Response (Text & Audio):**
+    *   The final response from Gemini is received as a stream of text chunks.
+    *   For each chunk, the backend performs two actions in parallel:
+        *   It sends the text chunk to the browser to be displayed in the chat window immediately.
+        *   It sends the text chunk to **Murf AI**'s WebSocket for real-time Text-to-Speech (TTS) conversion.
 
-## Technical Enhancements (August 2025)
-
-The audio processing pipeline has been significantly modernized and hardened.
-
-*   **Upgraded to `AudioWorklet`:** The client-side audio capture has been refactored from the deprecated `ScriptProcessorNode` to the modern **`AudioWorklet` API**. This moves audio processing off the main UI thread, resulting in a more performant and stable experience with less risk of UI "jank" or audio glitches.
-
-*   **Client-Side Audio Buffering:** To ensure compatibility with the transcription service, a client-side buffering system was implemented. The `AudioWorklet` produces very small audio chunks (128 samples / 8ms). The new system collects these small chunks into a larger buffer (e.g., 80ms) before sending them to the backend, satisfying the minimum duration requirements of the AssemblyAI service.
+6.  **Real-time Audio Playback:**
+    *   Murf AI streams the synthesized voice back to the backend as audio chunks.
+    *   The backend immediately forwards these audio chunks to the browser.
+    *   The browser uses the **Web Audio API** to queue and play these audio chunks as they arrive, resulting in a seamless and low-latency playback of the AI's voice.
 
 ## 🚀 Getting Started
 
@@ -80,11 +108,12 @@ Follow these instructions to set up and run the project locally.
 ### 1. Prerequisites
 
 *   Python 3.7+
-*   An IDE or text editor of your choice (e.g., VS Code).
-*   API keys for the following services:
-    *   AssemblyAI
-    *   Google AI (for Gemini)
-    *   Murf AI
+*   An IDE or text editor (e.g., VS Code).
+*   API keys for the following services. Note that the web search tool requires a Tavily API key.
+    *   **AssemblyAI** (Speech-to-Text)
+    *   **Google AI** (for Gemini LLM)
+    *   **Murf AI** (Text-to-Speech)
+    *   **Tavily AI** (for Web Search tool)
 
 ### 2. Installation
 
@@ -94,7 +123,7 @@ Follow these instructions to set up and run the project locally.
     cd ai-voice-agent
     ```
 
-2.  **Create a virtual environment and activate it:**
+2.  **Create and activate a virtual environment:**
     ```bash
     # For Windows
     python -m venv venv
@@ -105,21 +134,38 @@ Follow these instructions to set up and run the project locally.
     source venv/bin/activate
     ```
 
-3.  **Install the dependencies:**
+3.  **Install dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
 
 ### 3. Configuration
 
-1.  Create a file named `.env` in the root of the project.
-2.  Add your API keys to the `.env` file as follows:
+This application provides two ways to configure your API keys. Client-side keys always take precedence over server-side keys.
 
-    ```
+#### Method 1: Server-Side (Recommended for Development)
+
+You can provide API keys by creating a `.env` file in the root of the project. This is useful for local development if you are the only user.
+
+1.  Create a file named `.env`.
+2.  Add your API keys to it. This is also where you provide the key for the web search tool.
+
+    ```env
     ASSEMBLYAI_API_KEY="your_assemblyai_api_key"
     GOOGLE_GENAI_API_KEY="your_google_genai_api_key"
     MURF_API_KEY="your_murf_api_key"
+    TAVILY_API_KEY="your_tavily_api_key"
     ```
+
+#### Method 2: Client-Side (Recommended for Multiple Users)
+
+The application includes a user-friendly settings modal that allows you to enter API keys directly in the browser.
+
+1.  Click the **Settings** (⚙️) button in the top-right corner of the UI.
+2.  Enter your API keys for AssemblyAI, Gemini, Murf, and/or Tavily.
+3.  Click **Save**.
+
+The keys are stored securely in your browser's `localStorage` and will be used for all subsequent requests in your session. **This method overrides any keys set in the `.env` file on the server.**
 
 ### 4. Running the Application
 
@@ -133,16 +179,57 @@ Follow these instructions to set up and run the project locally.
 
 You should now be able to interact with the AI Voice Agent.
 
-## 🌐 API Endpoints
+## 🌐 API Reference
 
-The FastAPI backend provides the following endpoints:
+The application exposes both standard HTTP endpoints for status checks and a powerful WebSocket endpoint for real-time communication.
 
-*   `GET /`: Serves the main HTML page.
-*   `POST /agent/chat/{session_id}`: The main endpoint for handling voice chats. It now accepts a JSON body with a `transcript` field and returns the AI's response.
-*   `GET /health`: A health check endpoint that returns the status of the application and current credit usage.
+### HTTP Endpoints
+
+The FastAPI backend provides the following RESTful endpoints:
+
+*   `GET /`: Serves the main `index.html` page.
+*   `GET /health`: A health check endpoint. Returns the application status, number of active sessions, and current credit usage estimates.
 *   `GET /usage`: An endpoint to get the total estimated cost and processed audio seconds.
-*   `GET /static/{path}`: Serves static files (CSS, JavaScript).
-*   `WEBSOCKET /ws`: The endpoint for real-time transcription.
+*   `GET /static/{path}`: Serves static files (CSS, JavaScript, etc.).
+
+### WebSocket Endpoint
+
+This is the core of the application, used for the entire real-time conversational pipeline.
+
+*   **Endpoint**: `ws://<your-host>/ws`
+
+Communication is handled via JSON messages, each with a `type` field that defines its purpose.
+
+#### Client-to-Server Messages
+
+| `type` | Payload Fields | Description |
+| :--- | :--- | :--- |
+| **`config`** | `session_id` (str), `persona` (str), `sample_rate` (int), `api_keys` (object) | **Required first message.** Configures the session. `api_keys` is an object with optional keys: `assemblyai`, `gemini`, `murf`, `tavily`. |
+| **`audio`** | `data` (str) | Sends a base64-encoded PCM audio chunk to be transcribed. |
+| **`stop_recording`** | (none) | Signals to the server that the user has finished recording audio and the final transcript should be processed. |
+
+#### Server-to-Client Messages
+
+| `type` | Payload Fields | Description |
+| :--- | :--- | :--- |
+| **`transcript`** | `data` (str) | An *interim* transcription result from the STT service for real-time UI display. |
+| **`user_transcript`** | `data` (str) | The *final*, formatted user transcript after the user stops speaking. |
+| **`llm_chunk`** | `data` (str) | A chunk of the AI's text response as it's being generated by the LLM. |
+| **`llm_end`** | (none) | Signals that the full AI text response has been sent and the `llm_chunk` stream is complete. |
+| **`audio`** | `data` (str) | A base64-encoded audio chunk of the AI's synthesized voice from the TTS service. |
+| **`error`** | `detail` (str) | Reports a user-facing error that occurred on the server (e.g., "API key not configured"). |
+
+## 🤔 Troubleshooting
+
+Here are some common issues and their solutions:
+
+| Problem | Solution(s) |
+| :--- | :--- |
+| **Microphone Access Denied** | When you first click "Record", your browser will ask for permission to use your microphone. Ensure you click **"Allow"**. If you accidentally blocked it, you must go into your browser's site settings for `127.0.0.1:8000` to change the permission. |
+| **Connection Error / WebSocket Disconnected** | This usually means the backend server isn't running or is unreachable. <br> 1. Make sure you have the `uvicorn` server running in your terminal. <br> 2. Check for any error messages in the server terminal log. <br> 3. Ensure your browser can connect to the server's address (`http://127.0.0.1:8000`). |
+| **API Key Not Configured Error** | You will see a notification if a required API key is missing. <br> 1. Use the **Settings (⚙️)** modal in the UI to add your keys. This is the easiest method. <br> 2. Alternatively, ensure your `.env` file is correctly named and located in the project root, and that the variable names are correct (e.g., `GOOGLE_GENAI_API_KEY`). |
+| **AI Tools Fail (Weather/Search)** | The web search and weather tools require a `TAVILY_API_KEY`. If these tools aren't working, make sure you have provided this specific key via the Settings modal or your `.env` file. |
+| **No Audio Output** | Check that your computer's volume is on and not muted. Also, check the browser's console (`F12` or `Cmd+Opt+J`) for any errors related to the Web Audio API, which might indicate a problem with audio playback. |
 
 ## 🙏 Acknowledgements
 
