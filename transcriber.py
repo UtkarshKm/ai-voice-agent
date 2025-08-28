@@ -16,22 +16,23 @@ import asyncio
 from fastapi import WebSocket
 from typing import Callable, Coroutine
 
-aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
-
 class AssemblyAIStreamingTranscriber:
     def __init__(
         self,
         websocket: WebSocket,
         on_transcript_callback: Callable[[str], Coroutine],
-        sample_rate=16000,
+        sample_rate: int = 16000,
+        api_key: str = None,
     ):
         self.websocket = websocket
         self.on_transcript_callback = on_transcript_callback
         self.loop = asyncio.get_event_loop()
+
+        if not api_key:
+            raise ValueError("AssemblyAI API key is required.")
+
         self.client = StreamingClient(
-            StreamingClientOptions(
-                api_key=aai.settings.api_key, api_host="streaming.assemblyai.com"
-            )
+            StreamingClientOptions(api_key=api_key, api_host="streaming.assemblyai.com")
         )
         self.client.on(StreamingEvents.Begin, self.on_begin)
         self.client.on(StreamingEvents.Turn, self.on_turn)

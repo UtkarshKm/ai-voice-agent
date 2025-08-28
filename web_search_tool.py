@@ -2,21 +2,21 @@ import os
 import json
 from tavily import TavilyClient
 
-def web_search(query: str, max_results: int = 5):
+def web_search(query: str, api_key: str, max_results: int = 5):
     """
     Performs a web search using the Tavily API and returns a summarized answer and search results.
 
     Args:
         query (str): The search query.
+        api_key (str): The Tavily API key.
         max_results (int): The maximum number of results to include.
 
     Returns:
         str: A JSON string containing the summarized answer and a list of search results.
              Returns an error message if the API key is missing or the search fails.
     """
-    api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
-        return "Error: TAVILY_API_KEY environment variable not set."
+        return "Error: Tavily API key was not provided."
 
     try:
         tavily_client = TavilyClient(api_key=api_key)
