@@ -102,6 +102,59 @@ function showNotification(message, type = 'info', duration = 5000) {
     }
 })();
 
+// --- Settings Modal Logic ---
+(function setupSettingsModal() {
+    const settingsModal = document.getElementById('settings-modal');
+    const settingsButton = document.getElementById('settings-button');
+    const closeSettingsButton = document.getElementById('close-settings-button');
+    const saveSettingsButton = document.getElementById('save-settings-button');
+
+    const assemblyAiKeyInput = document.getElementById('assemblyai-key');
+    const geminiKeyInput = document.getElementById('gemini-key');
+    const murfKeyInput = document.getElementById('murf-key');
+    const tavilyKeyInput = document.getElementById('tavily-key');
+
+    if (!settingsModal || !settingsButton || !closeSettingsButton || !saveSettingsButton) return;
+
+    const openModal = () => settingsModal.classList.remove('hidden');
+    const closeModal = () => settingsModal.classList.add('hidden');
+
+    const loadKeys = () => {
+        assemblyAiKeyInput.value = localStorage.getItem('assemblyai_api_key') || '';
+        geminiKeyInput.value = localStorage.getItem('gemini_api_key') || '';
+        murfKeyInput.value = localStorage.getItem('murf_api_key') || '';
+        tavilyKeyInput.value = localStorage.getItem('tavily_api_key') || '';
+    };
+
+    const saveKeys = () => {
+        localStorage.setItem('assemblyai_api_key', assemblyAiKeyInput.value);
+        localStorage.setItem('gemini_api_key', geminiKeyInput.value);
+        localStorage.setItem('murf_api_key', murfKeyInput.value);
+        localStorage.setItem('tavily_api_key', tavilyKeyInput.value);
+        showNotification('API keys saved. The page will now reload.', 'success');
+        setTimeout(() => {
+            window.location.reload();
+        }, 1500);
+    };
+
+    settingsButton.addEventListener('click', () => {
+        loadKeys();
+        openModal();
+    });
+    closeSettingsButton.addEventListener('click', closeModal);
+    saveSettingsButton.addEventListener('click', saveKeys);
+
+    // Close modal if user clicks outside of it
+    window.addEventListener('click', (event) => {
+        if (event.target === settingsModal) {
+            closeModal();
+        }
+    });
+
+    // Load keys on initial page load
+    loadKeys();
+})();
+
 
 // --- Conversational AI Logic ---
 (function setupLlmQueryBot() {
@@ -240,11 +293,19 @@ function showNotification(message, type = 'info', duration = 5000) {
         }
 
         // Send config to start a new transcription session
+        const apiKeys = {
+            assemblyai: localStorage.getItem('assemblyai_api_key'),
+            gemini: localStorage.getItem('gemini_api_key'),
+            murf: localStorage.getItem('murf_api_key'),
+            tavily: localStorage.getItem('tavily_api_key'),
+        };
+
         websocket.send(JSON.stringify({
             type: "config",
             session_id: window.chatSessionId,
             sample_rate: 16000,
-            persona: personaSelectEl.value
+            persona: personaSelectEl.value,
+            api_keys: apiKeys
         }));
 
         try {

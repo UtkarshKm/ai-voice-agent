@@ -28,12 +28,11 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Initialize AssemblyAI
-aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
-
-# Configure Google GenAI
-genai.configure(api_key=os.getenv("GOOGLE_GENAI_API_KEY"))
+# No global API key initialization here. They will be handled per session.
 from google.generativeai import types
+
+# A lock for thread-safe reconfiguration of the Gemini API key
+gemini_api_lock = threading.Lock()
 
 # Configuration constants
 MAX_HISTORY_LENGTH = 50
@@ -121,19 +120,20 @@ async def generate_llm_response(history: list, persona: str = PERSONAS["default"
         # Re-raise as HTTPException
         raise HTTPException(status_code=500, detail="LLM service failed")
 
-async def stream_llm_to_murf_and_client(text_stream, websocket: WebSocket):
+async def stream_llm_to_murf_and_client(text_stream, websocket: WebSocket, murf_api_key: str):
     """
     Streams text to Murf TTS and also streams the text chunks to the client's UI.
     """
     WS_URL = "wss://api.murf.ai/v1/speech/stream-input"
-    API_KEY = os.getenv("MURF_API_KEY")
     CONTEXT_ID = "my_static_context_id_for_streaming"
 
-    if not API_KEY:
-        logger.error("MURF_API_KEY environment variable not set.")
+    if not murf_api_key:
+        logger.error("Murf API key not provided.")
+        # Send an error to the client and return
+        await websocket.send_text(json.dumps({"type": "error", "detail": "MURF_API_KEY is not configured."}))
         return ""
 
-    uri = f"{WS_URL}?api-key={API_KEY}&sample_rate=44100&channel_type=MONO&format=WAV"
+    uri = f"{WS_URL}?api-key={murf_api_key}&sample_rate=44100&channel_type=MONO&format=WAV"
     logger.info("Connecting to Murf WebSocket...")
     full_text = ""
 
@@ -304,6 +304,22 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Generate LLM response with function calling and stream to TTS and client
                 try:
                     logger.info(f"Starting LLM/TTS pipeline for session {session_id}...")
+
+                    # --- API Key Handling ---
+                    api_keys = session_data.get("api_keys", {})
+                    gemini_api_key = api_keys.get("gemini") or os.getenv("GOOGLE_GENAI_API_KEY")
+                    murf_api_key = api_keys.get("murf") or os.getenv("MURF_API_KEY")
+                    tavily_api_key = api_keys.get("tavily") or os.getenv("TAVILY_API_KEY")
+
+                    if not gemini_api_key:
+                        logger.error("Gemini API key is not configured for this session.")
+                        await websocket.send_text(json.dumps({"type": "error", "detail": "GEMINI_API_KEY is not configured."}))
+                        return
+
+                    # Configure Gemini API for this specific call
+                    with gemini_api_lock:
+                        genai.configure(api_key=gemini_api_key)
+
                     persona_prompt = session_data.get("persona_prompt", PERSONAS["default"])
                     llm_text = ""
 
@@ -352,7 +368,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         elif function_call.name == "web_search":
                             query = function_call.args.get("query")
                             logger.info(f"Calling web_search for query: {query}")
-                            search_result = web_search(query=query)
+                            search_result = web_search(query=query, api_key=tavily_api_key)
                             logger.info(f"Search result: {search_result[:100]}...") # Log snippet
 
                             # 5. Send the result back to the model
@@ -378,7 +394,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 if hasattr(chunk, 'text') and chunk.text:
                                     yield chunk.text
 
-                        llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response_stream), websocket)
+                        llm_text = await stream_llm_to_murf_and_client(text_stream_generator(final_response_stream), websocket, murf_api_key)
 
                     else:
                         # 6. No function call, so process the text from the initial response.
@@ -396,7 +412,7 @@ async def websocket_endpoint(websocket: WebSocket):
                              # This can happen if the response was blocked.
                              logger.warning("Response was blocked or had no content.")
 
-                        llm_text = await stream_llm_to_murf_and_client(text_stream_generator(response_text), websocket)
+                        llm_text = await stream_llm_to_murf_and_client(text_stream_generator(response_text), websocket, murf_api_key)
 
                     # Update history with the final model response
                     if llm_text:
@@ -430,21 +446,38 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Get persona from client, fallback to "default"
                 persona_key = message.get("persona", "default")
                 persona_prompt = PERSONAS.get(persona_key, PERSONAS["default"])
-                logger.info(f"Configuring session {session_id} with persona: {persona_key}")
 
-                # Store the persona choice in the session data
+                # Get API keys from client
+                api_keys = message.get("api_keys", {})
+                logger.info(f"Configuring session {session_id} with persona: {persona_key} and custom API keys.")
+
+                # Store session data
                 if session_id not in chat_histories:
-                    chat_histories[session_id] = {"history": [], "persona_prompt": persona_prompt, "last_accessed": datetime.now()}
+                    chat_histories[session_id] = {
+                        "history": [],
+                        "persona_prompt": persona_prompt,
+                        "api_keys": api_keys,
+                        "last_accessed": datetime.now()
+                    }
                 else:
                     chat_histories[session_id]["persona_prompt"] = persona_prompt
+                    chat_histories[session_id]["api_keys"] = api_keys
 
                 is_listening = True # Start listening for transcripts
 
-                # Initialize transcriber with the callback
+                # Initialize transcriber with the user-provided key or fallback
+                assemblyai_api_key = api_keys.get("assemblyai") or os.getenv("ASSEMBLYAI_API_KEY")
+                if not assemblyai_api_key:
+                    logger.error("AssemblyAI API key not found.")
+                    await websocket.send_text(json.dumps({"type": "error", "detail": "ASSEMBLYAI_API_KEY is not configured."}))
+                    await websocket.close()
+                    return
+
                 transcriber = AssemblyAIStreamingTranscriber(
                     websocket=websocket,
                     on_transcript_callback=process_transcript,
-                    sample_rate=message.get("sample_rate", 16000)
+                    sample_rate=message.get("sample_rate", 16000),
+                    api_key=assemblyai_api_key
                 )
 
             elif message["type"] == "audio":
