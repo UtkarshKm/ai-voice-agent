@@ -17,9 +17,9 @@ This AI agent is more than just a chatbot. It comes packed with advanced feature
 
 *   **Dynamic AI Personas:** Tailor the AI's personality to your preference. Choose from a dropdown menu of predefined personas (e.g., "Default," "Sarcastic Assistant") to change the AI's conversational style.
 
-*   **Integrated AI Tools (Function Calling):** The agent can access external tools to answer questions about real-world, real-time information:
-    *   **🌐 Web Search:** Ask about current events, news, or any topic on the internet.
-    *   **☀️ Current Weather:** Get the current weather conditions for any city.
+*   **Integrated AI Tools (Function Calling):** The agent can access external tools to answer questions about real-world, real-time information. If you ask a question that requires current information, the AI will automatically decide to use one of the following tools:
+    *   **🌐 Web Search:** Ask about current events, news, or any topic on the internet. The agent uses the Tavily API to perform a web search and provide a summarized, up-to-date answer. This requires a `TAVILY_API_KEY`.
+    *   **☀️ Current Weather:** Get the current weather conditions for any city. The agent can fetch real-time weather data (like temperature and conditions) for any location you specify.
 
 *   **Client-Side API Key Management:** A secure and flexible way to manage API credentials. You can enter your own API keys for AssemblyAI, Google Gemini, Murf, and Tavily directly into a settings modal in the browser. These keys are stored locally in your browser and are used for the duration of your session, providing enhanced privacy and control.
 
@@ -57,6 +57,7 @@ Here is an overview of the key files and directories in the project:
 | `persona.py` | Defines the different AI **personas** (e.g., "default," "sarcastic") that can be selected in the UI to change the AI's personality. |
 | `get_current_weather_tool.py` | Implements the **function calling** tool for fetching the current weather. |
 | `web_search_tool.py` | Implements the **function calling** tool for performing web searches using the Tavily API. |
+| `gemini_search_tool_eg.py` | A standalone **example script** demonstrating how to use Google's native search tool with Gemini. It is not used in the main application but serves as a helpful reference. |
 | `requirements.txt` | Lists all the Python dependencies for the project. |
 | `static/` | A directory containing all frontend assets. |
 | `static/index.html` | The main HTML file for the user interface. |
@@ -80,15 +81,12 @@ The application orchestrates a sophisticated, real-time pipeline between the bro
         *   **Interim results:** These are sent immediately to the UI for you to see what the AI is "hearing" in real-time.
         *   **Final transcript:** Once you stop talking, a final, more accurate transcript is generated.
 
-4.  **LLM Processing & Tool Use:**
-    *   The final transcript is passed to the **Google Gemini** model.
-    *   The model first analyzes the transcript to determine if it needs to use a **tool** to answer the query.
-    *   **If a tool is needed:**
-        *   The model returns a *function call* request to the backend (e.g., `get_current_weather(city="Boston")`).
-        *   The backend executes the corresponding Python function.
-        *   The result from the tool (e.g., the weather data) is sent back to the Gemini model.
-        *   The model uses this new information to generate its final, informed response.
-    *   **If no tool is needed:** The model generates a response directly based on the conversation history and the latest transcript.
+4.  **LLM Processing & Tool Use (Function Calling):**
+    *   The final transcript is sent to the **Google Gemini** model. To determine if an external tool is needed, the application follows a two-step process:
+    *   **Step 1: Tool Check.** The backend first sends a non-streaming request to the model with the list of available tools (`get_current_weather` and `web_search`). The model analyzes the user's query and, if it decides a tool is necessary, it returns a *function call* request (e.g., `get_current_weather(city="Boston")`) instead of a text response.
+    *   **Step 2: Tool Execution & Final Response.**
+        *   **If a tool is requested:** The backend executes the corresponding Python function (e.g., calling the weather API). The result from the tool is then sent back to the Gemini model in a second request. The model uses this new, real-world information to generate a final, informed answer, which is then streamed to the user.
+        *   **If no tool is needed:** If the model's initial response does not contain a function call, the application proceeds directly to stream the text-based answer to the user.
 
 5.  **Dual Streaming Response (Text & Audio):**
     *   The final response from Gemini is received as a stream of text chunks.
