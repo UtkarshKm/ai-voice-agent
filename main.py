@@ -253,14 +253,25 @@ async def get_usage():
         "remaining_credits": max(50 - credit_usage["estimated_cost"], 0)  # Assuming $50 free credits
     }
 
-# Serve homepage
+# Serve landing page
 @app.get("/", response_class=HTMLResponse)
-async def get_home():
+async def get_landing_page():
+    """Serves the landing page."""
     try:
         with open("static/index.html", "r", encoding="utf-8") as file:
             return HTMLResponse(content=file.read())
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Homepage not found")
+        raise HTTPException(status_code=404, detail="Landing page not found")
+
+# Serve main app
+@app.get("/app", response_class=HTMLResponse)
+async def get_app_page():
+    """Serves the main application page."""
+    try:
+        with open("static/app.html", "r", encoding="utf-8") as file:
+            return HTMLResponse(content=file.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="App page not found")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
