@@ -153,6 +153,17 @@ function showNotification(message, type = 'info', duration = 5000) {
 
     // Load keys on initial page load
     loadKeys();
+
+    // Check if keys are set, if not, open the modal
+    const areKeysMissing = !localStorage.getItem('assemblyai_api_key') ||
+                             !localStorage.getItem('gemini_api_key') ||
+                             !localStorage.getItem('murf_api_key') ||
+                             !localStorage.getItem('tavily_api_key');
+
+    if (areKeysMissing) {
+        openModal();
+        showNotification('Welcome! Please set your API keys to begin.', 'info');
+    }
 })();
 
 
